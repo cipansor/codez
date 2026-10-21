@@ -3,19 +3,11 @@ name = "backend"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-repository.workspace = true
 
 [dependencies]
-axum = "0.8"
-tokio = { version = "1.0", features = ["full"] }
+shared = { path = "../shared" }
 serde.workspace = true
 serde_json.workspace = true
-tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.7", features = ["cors", "fs"] }
-shared = { path = "../shared" }
-chrono = { version = "0.4.43", features = ["serde"] }
-uuid = { version = "1.20.0", features = ["v4"] }
-reqwest = { version = "0.13", features = ["json"] }
-ipnetwork = "0.21"
-url = "2.5"
-tokio-postgres = "0.7"
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"

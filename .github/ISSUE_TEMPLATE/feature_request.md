@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an idea or enhancement for Codeza
+about: Suggest an idea or enhancement for Codez
 title: "feat: "
 labels: [enhancement]
 ---

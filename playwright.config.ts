@@ -26,7 +26,7 @@ export default defineConfig({
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL for all page.goto() and request.* calls. */
-    baseURL: process.env.CODEZA_BASE_URL ?? 'http://127.0.0.1:8080',
+    baseURL: process.env.CODEZ_BASE_URL ?? 'http://127.0.0.1:8080',
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: 'on-first-retry',

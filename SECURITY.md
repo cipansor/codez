@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Codeza is under active development. Security fixes are applied to the `main` branch;
+Codez is under active development. Security fixes are applied to the `main` branch;
 there are no maintained release branches yet.
 
 ## Reporting a vulnerability
@@ -23,7 +23,7 @@ investigate and coordinate a fix and disclosure timeline with you.
 
 ## Scope notes
 
-Codeza is a demo-oriented platform: storage is in-memory by default, and there is no
+Codez is a demo-oriented platform: storage is in-memory by default, and there is no
 authentication middleware yet, so several endpoints trust the caller's identity. Please
 focus reports on issues that are independent of the missing auth layer, such as:
 

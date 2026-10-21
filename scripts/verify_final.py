@@ -8,7 +8,7 @@ import time
 
 def test_final():
     print("Verifying Final Enhancements...")
-    repo_owner = "admin"
+    repo_owner = "codez-org"
     repo_name = f"final-repo-{int(time.time())}"
 
     try:

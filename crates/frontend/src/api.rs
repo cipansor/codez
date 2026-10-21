@@ -1,4 +1,4 @@
-//! Typed HTTP helpers for talking to the Codeza API.
+//! Typed HTTP helpers for talking to the Codez API.
 //!
 //! Every page fetches through these helpers instead of hand-rolling
 //! `Request::get(..).send().await.unwrap().json()` chains. Read helpers are
@@ -11,16 +11,12 @@
 //! a rejected write.
 //!
 //! Paths passed to these helpers are absolute API paths (`/api/v1/repos/owner/name`),
-//! not API-relative ones; the helpers do not rewrite the URL. Build paths with
-//! [`api_url`] (or format them explicitly) so the versioned base stays in one
-//! place rather than being hand-written at every call site.
+//! not API-relative ones; the helpers do not rewrite the URL.
 
 use gloo_net::http::Request;
 use leptos::prelude::LocalResource;
 use serde::{de::DeserializeOwned, Serialize};
 use std::future::Future;
-
-pub const BASE_URL: &str = "/api/v1";
 
 /// Reactive async resource for client-side rendering.
 ///
@@ -38,11 +34,6 @@ where
     Fut: Future<Output = T> + 'static,
 {
     LocalResource::new(move || fetcher(source()))
-}
-
-/// Build an absolute API URL from a path relative to `/api/v1`.
-pub fn api_url(path: &str) -> String {
-    format!("{BASE_URL}{path}")
 }
 
 /// Percent-encode a string for use as a query-parameter value (RFC 3986
@@ -69,27 +60,11 @@ pub async fn get<T: DeserializeOwned + Default>(url: &str) -> T {
     }
 }
 
-/// `GET url`, decoding `T`. Returns `None` on error.
-pub async fn get_opt<T: DeserializeOwned>(url: &str) -> Option<T> {
-    match Request::get(url).send().await {
-        Ok(resp) => resp.json::<T>().await.ok(),
-        Err(_) => None,
-    }
-}
-
 /// `GET url`, decoding `T`. Falls back to `fallback` on error.
 pub async fn get_or<T: DeserializeOwned>(url: &str, fallback: T) -> T {
     match Request::get(url).send().await {
         Ok(resp) => resp.json::<T>().await.unwrap_or(fallback),
         Err(_) => fallback,
-    }
-}
-
-/// `GET url` as raw text. Falls back to an empty string on error.
-pub async fn get_text(url: &str) -> String {
-    match Request::get(url).send().await {
-        Ok(resp) => resp.text().await.unwrap_or_default(),
-        Err(_) => String::new(),
     }
 }
 
@@ -108,6 +83,14 @@ where
     }
 }
 
+/// `GET url`, reporting whether the server replied `2xx`.
+///
+/// Gitea models several checks as a bare status: a starred repository answers
+/// `204`, an unstarred one `404`. The status *is* the payload.
+pub async fn probe(url: &str) -> bool {
+    matches!(Request::get(url).send().await, Ok(resp) if resp.ok())
+}
+
 /// Send a prepared write request and report whether the server accepted it.
 ///
 /// Takes the *result* of building the request so a body that fails to serialize
@@ -120,11 +103,6 @@ async fn send_ok(req: Result<Request, gloo_net::Error>) -> bool {
         Ok(req) => matches!(req.send().await, Ok(resp) if resp.ok()),
         Err(_) => false,
     }
-}
-
-/// `POST url` with no body. Returns whether the server replied `2xx`.
-pub async fn post(url: &str) -> bool {
-    send_ok(Request::post(url).build()).await
 }
 
 /// `PATCH url` with no body. Returns whether the server replied `2xx`.
@@ -176,6 +154,127 @@ where
     resp.json::<T>().await.ok()
 }
 
+/// Decode standard base64 into text. The contents endpoints return file bodies
+/// this way; invalid base64 or non-UTF-8 bytes come back empty rather than
+/// rendering replacement characters.
+pub fn decode_base64(input: &str) -> String {
+    let cleaned: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    let mut out = Vec::with_capacity(cleaned.len() * 3 / 4);
+    let value = |b: u8| -> Option<u8> {
+        match b {
+            b'A'..=b'Z' => Some(b - b'A'),
+            b'a'..=b'z' => Some(b - b'a' + 26),
+            b'0'..=b'9' => Some(b - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+    for chunk in cleaned.chunks(4) {
+        let mut buffer = 0u32;
+        let mut bits = 0;
+        for byte in chunk {
+            if *byte == b'=' {
+                break;
+            }
+            let Some(v) = value(*byte) else {
+                return String::new();
+            };
+            buffer = (buffer << 6) | v as u32;
+            bits += 6;
+        }
+        if bits >= 8 {
+            let bytes = buffer << (24 - bits);
+            out.push((bytes >> 16) as u8);
+            if bits >= 16 {
+                out.push((bytes >> 8) as u8);
+            }
+            if bits >= 24 {
+                out.push(bytes as u8);
+            }
+        }
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// Encode text as standard base64, as the file-write endpoints expect.
+pub fn encode_base64(input: &str) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 /// The message every failed write shows, so error text stays consistent across
 /// pages instead of each call site inventing its own wording.
 pub const WRITE_ERROR: &str = "Could not save your changes. Please try again.";
+
+/// Run a non-`Send` future on the current thread.
+///
+/// `gloo_net` request futures borrow thread-local state, so they cannot be
+/// handed to a multithreaded runtime; `spawn_local` is the only executor that
+/// can drive them, and re-exporting it here keeps `leptos::task` out of every
+/// page's import list.
+pub fn spawn<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + 'static,
+{
+    leptos::task::spawn_local(future);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base64_round_trips_text() {
+        for original in [
+            "",
+            "f",
+            "fo",
+            "foo",
+            "hello world",
+            "# codez\n\nA platform.\n",
+        ] {
+            assert_eq!(decode_base64(&encode_base64(original)), original);
+        }
+    }
+
+    #[test]
+    fn base64_matches_the_standard_alphabet() {
+        assert_eq!(encode_base64("f"), "Zg==");
+        assert_eq!(encode_base64("fo"), "Zm8=");
+        assert_eq!(encode_base64("foo"), "Zm9v");
+    }
+
+    #[test]
+    fn base64_decoding_rejects_garbage() {
+        assert_eq!(decode_base64("not base64!!"), "");
+    }
+
+    #[test]
+    fn query_encoding_escapes_reserved_characters() {
+        assert_eq!(encode_query("a b&c#d"), "a%20b%26c%23d");
+        assert_eq!(encode_query("plain-_.~"), "plain-_.~");
+    }
+}

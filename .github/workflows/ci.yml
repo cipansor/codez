@@ -115,9 +115,11 @@ jobs:
         run: |
           # Generous window: `trunk serve` may still rebuild after the
           # pre-build above, and the first run has no cached toolchain.
+          # Probe an endpoint the port actually serves: Gitea has no
+          # `/api/v1/repos` list (it 404s), so use `/api/v1/version`.
           for _ in $(seq 1 150); do
             if curl -sf http://127.0.0.1:8080/ >/dev/null \
-               && curl -sf http://127.0.0.1:8080/api/v1/repos >/dev/null; then
+               && curl -sf http://127.0.0.1:8080/api/v1/version >/dev/null; then
               exit 0
             fi
             sleep 2

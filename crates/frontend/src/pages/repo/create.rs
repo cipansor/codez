@@ -1,112 +1,174 @@
-//! Repository creation and migration forms.
+//! Repository creation and migration.
 
-use crate::api::{get, local_resource, post_json, WRITE_ERROR};
+use crate::api::{get, local_resource, post_json_resp, spawn, WRITE_ERROR};
+use crate::components::FormError;
 use leptos::prelude::*;
-use leptos::task::spawn_local;
-use shared::{CreateRepoOption, GitignoreTemplate, LicenseTemplate};
+use leptos_router::hooks::*;
+use shared::{CreateRepoOption, MigrateRepoOptions, Repository};
 
+/// `/repo/create` — create a repository in the signed-in user's account.
 #[component]
 pub fn CreateRepo() -> impl IntoView {
-    let (name, set_name) = signal("".to_string());
-    let (desc, set_desc) = signal("".to_string());
-    let (gitignore, set_gitignore) = signal("".to_string());
-    let (license, set_license) = signal("".to_string());
+    let navigate = use_navigate();
+    let (name, set_name) = signal(String::new());
+    let (description, set_description) = signal(String::new());
     let (private, set_private) = signal(false);
-    let (form_error, set_form_error) = signal(Option::<String>::None);
-
-    let licenses = local_resource(
-        || (),
-        |_| async move { get::<Vec<LicenseTemplate>>("/api/v1/licenses").await },
-    );
+    let (auto_init, set_auto_init) = signal(true);
+    let (gitignore, set_gitignore) = signal(String::new());
+    let (license, set_license) = signal(String::new());
+    let (error, set_error) = signal(Option::<String>::None);
 
     let gitignores = local_resource(
         || (),
-        |_| async move { get::<Vec<GitignoreTemplate>>("/api/v1/gitignore/templates").await },
+        |_| async move { get::<Vec<String>>("/api/v1/gitignore/templates").await },
+    );
+    let licenses = local_resource(
+        || (),
+        |_| async move { get::<Vec<String>>("/api/v1/licenses").await },
     );
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
-        let payload = CreateRepoOption {
+        let body = CreateRepoOption {
             name: name.get(),
-            description: if desc.get().is_empty() {
-                None
-            } else {
-                Some(desc.get())
-            },
-            private: private.get(),
-            auto_init: true,
-            gitignores: if gitignore.get().is_empty() {
-                None
-            } else {
-                Some(gitignore.get())
-            },
-            license: if license.get().is_empty() {
-                None
-            } else {
-                Some(license.get())
-            },
-            readme: Some("Default".to_string()),
-            default_branch: None,
-            allow_rebase_merge: None,
-            allow_squash_merge: None,
-            allow_merge_commit: None,
-            has_issues: None,
-            has_wiki: None,
-            has_projects: None,
+            description: Some(description.get()),
+            private: Some(private.get()),
+            auto_init: Some(auto_init.get()),
+            gitignores: Some(gitignore.get()).filter(|g| !g.is_empty()),
+            license: Some(license.get()).filter(|l| !l.is_empty()),
+            ..Default::default()
         };
-        spawn_local(async move {
-            // Keep the form filled in when creation is rejected so the user does
-            // not lose the name, description and template choices.
-            if post_json("/api/v1/user/repos", &payload).await {
-                set_form_error.set(None);
-            } else {
-                set_form_error.set(Some(WRITE_ERROR.to_string()));
+        let navigate = navigate.clone();
+        spawn(async move {
+            match post_json_resp::<_, Repository>("/api/v1/user/repos", &body).await {
+                Some(repo) => {
+                    set_error.set(None);
+                    let path = crate::components::repo_path(&repo);
+                    navigate(&format!("/repos/{path}"), Default::default());
+                }
+                // Keep the typed name and description on a rejected write.
+                None => set_error.set(Some(WRITE_ERROR.to_string())),
             }
         });
     };
 
     view! {
-        <div class="create-repo">
-            <h3>"Create New Repository"</h3>
-            <form on:submit=on_submit>
-                <input type="text" placeholder="Repository Name" prop:value=name on:input=move |ev| set_name.set(event_target_value(&ev)) />
-                <input type="text" placeholder="Description" prop:value=desc on:input=move |ev| set_desc.set(event_target_value(&ev)) />
-
-                <div class="my-2">
+        <div class="create-repo container-narrow">
+            <h2>"New repository"</h2>
+            {move || error.get().map(|msg| view! { <FormError message=msg/> })}
+            <form class="panel" on:submit=on_submit>
+                <div class="form-group">
+                    <label>"Repository name"</label>
+                    <input type="text" prop:value=name
+                        on:input=move |ev| set_name.set(event_target_value(&ev)) />
+                </div>
+                <div class="form-group">
+                    <label>"Description"</label>
+                    <textarea class="textarea-tall" prop:value=description
+                        on:input=move |ev| set_description.set(event_target_value(&ev))></textarea>
+                </div>
+                <div class="form-group">
+                    <label>".gitignore template"</label>
+                    <select on:change=move |ev| set_gitignore.set(event_target_value(&ev))>
+                        <option value="">"None"</option>
+                        {move || gitignores.get().unwrap_or_default().into_iter().map(|name| {
+                            view! { <option value=name.clone()>{name.clone()}</option> }
+                        }).collect_view()}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>"License"</label>
+                    <select on:change=move |ev| set_license.set(event_target_value(&ev))>
+                        <option value="">"None"</option>
+                        {move || licenses.get().unwrap_or_default().into_iter().map(|name| {
+                            view! { <option value=name.clone()>{name.clone()}</option> }
+                        }).collect_view()}
+                    </select>
+                </div>
+                <div class="checkbox-group">
                     <label>
-                        <input type="checkbox" prop:checked=private on:change=move |ev| set_private.set(event_target_checked(&ev)) />
-                        " Make Repository Private"
+                        <input type="checkbox" prop:checked=private
+                            on:change=move |ev| set_private.set(event_target_checked(&ev)) />
+                        " Private"
+                    </label>
+                    <label>
+                        <input type="checkbox" prop:checked=auto_init
+                            on:change=move |ev| set_auto_init.set(event_target_checked(&ev)) />
+                        " Initialize with a README"
                     </label>
                 </div>
-
-                <Suspense fallback=move || view! { <select disabled><option>"Loading licenses..."</option></select> }>
-                    {move || licenses.get().map(|list| view! {
-                        <select on:change=move |ev| set_license.set(event_target_value(&ev))>
-                            <option value="">"Select License"</option>
-                            <For each=move || list.clone() key=|l| l.key.clone() children=move |l| {
-                                view! { <option value={l.key}>{l.name}</option> }
-                            }/>
-                        </select>
-                    })}
-                </Suspense>
-
-                <Suspense fallback=move || view! { <select disabled><option>"Loading gitignores..."</option></select> }>
-                    {move || gitignores.get().map(|list| view! {
-                        <select on:change=move |ev| set_gitignore.set(event_target_value(&ev))>
-                            <option value="">"Select .gitignore"</option>
-                            <For each=move || list.clone() key=|g| g.name.clone() children=move |g| {
-                                view! { <option value={g.name.clone()}>{g.name.clone()}</option> }
-                            }/>
-                        </select>
-                    })}
-                </Suspense>
-
-                <button type="submit">"Create"</button>
-                {move || form_error.get().map(|msg| view! {
-                    <p class="form-error" role="alert">{msg}</p>
-                })}
+                <div class="form-actions">
+                    <button class="btn-primary" type="submit">"Create repository"</button>
+                </div>
             </form>
-            <p><a href="/repo/migrate">"Or Migrate Repository"</a></p>
+        </div>
+    }
+}
+
+/// `/repo/migrate` — import a repository from another host.
+#[component]
+pub fn MigrateRepo() -> impl IntoView {
+    let navigate = use_navigate();
+    let (clone_addr, set_clone_addr) = signal(String::new());
+    let (repo_name, set_repo_name) = signal(String::new());
+    let (description, set_description) = signal(String::new());
+    let (private, set_private) = signal(false);
+    let (error, set_error) = signal(Option::<String>::None);
+
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let body = MigrateRepoOptions {
+            clone_addr: clone_addr.get(),
+            repo_name: repo_name.get(),
+            description: Some(description.get()),
+            private: Some(private.get()),
+            ..Default::default()
+        };
+        let navigate = navigate.clone();
+        spawn(async move {
+            match post_json_resp::<_, Repository>("/api/v1/repos/migrate", &body).await {
+                Some(repo) => {
+                    set_error.set(None);
+                    let path = crate::components::repo_path(&repo);
+                    navigate(&format!("/repos/{path}"), Default::default());
+                }
+                None => set_error.set(Some(WRITE_ERROR.to_string())),
+            }
+        });
+    };
+
+    view! {
+        <div class="migrate-repo container-narrow">
+            <h2>"Migrate repository"</h2>
+            {move || error.get().map(|msg| view! { <FormError message=msg/> })}
+            <form class="panel" on:submit=on_submit>
+                <div class="form-group">
+                    <label>"Clone address"</label>
+                    <input type="text" placeholder="https://example.com/owner/repo.git"
+                        prop:value=clone_addr
+                        on:input=move |ev| set_clone_addr.set(event_target_value(&ev)) />
+                </div>
+                <div class="form-group">
+                    <label>"Repository name"</label>
+                    <input type="text" prop:value=repo_name
+                        on:input=move |ev| set_repo_name.set(event_target_value(&ev)) />
+                </div>
+                <div class="form-group">
+                    <label>"Description"</label>
+                    <textarea class="textarea-tall" prop:value=description
+                        on:input=move |ev| set_description.set(event_target_value(&ev))></textarea>
+                </div>
+                <div class="checkbox-group">
+                    <label>
+                        <input type="checkbox" prop:checked=private
+                            on:change=move |ev| set_private.set(event_target_checked(&ev)) />
+                        " Private"
+                    </label>
+                </div>
+                <div class="form-actions">
+                    <button class="btn-primary" type="submit">"Migrate repository"</button>
+                </div>
+            </form>
         </div>
     }
 }

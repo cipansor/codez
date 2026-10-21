@@ -1,133 +1,68 @@
-//! Repository settings, branches, webhooks, secrets and deploy keys.
+//! Repository settings: general options, collaborators, webhooks, secrets,
+//! deploy keys, protected branches and LFS locks.
 
-use crate::api::{
-    get, get_then, local_resource, patch_json, post, post_json, put_json, WRITE_ERROR,
-};
-use crate::components::RepoNav;
+use crate::api::{get, get_or, local_resource, patch_json, put_json, spawn, WRITE_ERROR};
+use crate::components::{FormError, Loading, RepoNav};
 use leptos::prelude::*;
-use leptos::task::spawn_local;
 use leptos_router::hooks::*;
-use shared::{
-    CreateHookOption, CreateKeyOption, CreateProtectedBranchOption, CreateSecretOption, DeployKey,
-    LfsLock, ProtectedBranch, RepoSettingsOption, RepoTopicOptions, Secret, TransferRepoOption,
-    Webhook, WebhookDelivery,
-};
+use shared::{AddCollaboratorOption, DeployKey, EditRepoOption, Hook, Repository, Secret, User};
 
+/// `/repos/:owner/:repo/settings` — the repository's general options.
 #[component]
 pub fn RepoSettings() -> impl IntoView {
     let params = use_params_map();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
-    let repo_name = move || params.with(|params| params.get("repo").unwrap_or_default());
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
+    let repo = move || params.with(|p| p.get("repo").unwrap_or_default());
 
-    let (desc, set_desc) = signal("".to_string());
-    let (website, set_website) = signal("".to_string());
-    let (default_branch, set_default_branch) = signal("main".to_string());
+    let (description, set_description) = signal(String::new());
+    let (website, set_website) = signal(String::new());
     let (private, set_private) = signal(false);
-    let (rebase, set_rebase) = signal(true);
-    let (squash, set_squash) = signal(true);
-    let (merge, set_merge) = signal(true);
-    let (issues, set_issues) = signal(true);
-    let (wiki, set_wiki) = signal(true);
-    let (projects, set_projects) = signal(true);
+    let (has_issues, set_has_issues) = signal(true);
+    let (has_wiki, set_has_wiki) = signal(true);
+    let (has_projects, set_has_projects) = signal(true);
+    let (error, set_error) = signal(Option::<String>::None);
+    let (saved, set_saved) = signal(false);
+    let (refresh, set_refresh) = signal(0u32);
 
-    let (transfer_to, set_transfer_to) = signal("".to_string());
-    let (topics, set_topics) = signal("".to_string());
-    let (save_error, set_save_error) = signal(Option::<String>::None);
-
-    // Load initial settings
-    let _ = local_resource(
-        move || (owner(), repo_name()),
-        move |(o, r)| async move {
-            get_then::<RepoSettingsOption, _>(
-                &format!("/api/v1/repos/{}/{}/settings", o, r),
-                |settings| {
-                    set_desc.set(settings.description.unwrap_or_default());
-                    set_website.set(settings.website.unwrap_or_default());
-                    set_default_branch.set(settings.default_branch.unwrap_or("main".to_string()));
-                    set_private.set(settings.private.unwrap_or(false));
-                    set_rebase.set(settings.allow_rebase_merge.unwrap_or(true));
-                    set_squash.set(settings.allow_squash_merge.unwrap_or(true));
-                    set_merge.set(settings.allow_merge_commit.unwrap_or(true));
-                    set_issues.set(settings.has_issues.unwrap_or(true));
-                    set_wiki.set(settings.has_wiki.unwrap_or(true));
-                    set_projects.set(settings.has_projects.unwrap_or(true));
-                },
-            )
-            .await;
+    // Seed the form from the current repository once it has loaded.
+    let current = local_resource(
+        move || (owner(), repo(), refresh.get()),
+        |(o, r, _)| async move {
+            get_or::<Option<Repository>>(&format!("/api/v1/repos/{o}/{r}"), None).await
         },
     );
+    Effect::new(move |_| {
+        if let Some(Some(r)) = current.get() {
+            set_description.set(r.description.clone().unwrap_or_default());
+            set_website.set(r.website.clone().unwrap_or_default());
+            set_private.set(r.private.unwrap_or(false));
+            set_has_issues.set(r.has_issues.unwrap_or(true));
+            set_has_wiki.set(r.has_wiki.unwrap_or(true));
+            set_has_projects.set(r.has_projects.unwrap_or(true));
+        }
+    });
 
-    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+    let on_save = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
-        let payload = RepoSettingsOption {
-            description: Some(desc.get()),
-            private: Some(private.get()),
+        let body = EditRepoOption {
+            description: Some(description.get()),
             website: Some(website.get()),
-            default_branch: Some(default_branch.get()),
-            allow_rebase_merge: Some(rebase.get()),
-            allow_squash_merge: Some(squash.get()),
-            allow_merge_commit: Some(merge.get()),
-            has_issues: Some(issues.get()),
-            has_wiki: Some(wiki.get()),
-            has_projects: Some(projects.get()),
+            private: Some(private.get()),
+            has_issues: Some(has_issues.get()),
+            has_wiki: Some(has_wiki.get()),
+            has_projects: Some(has_projects.get()),
+            ..Default::default()
         };
         let o = owner();
-        let r = repo_name();
-        spawn_local(async move {
-            if patch_json(&format!("/api/v1/repos/{}/{}/settings", o, r), &payload).await {
-                set_save_error.set(None);
+        let r = repo();
+        spawn(async move {
+            if patch_json(&format!("/api/v1/repos/{o}/{r}"), &body).await {
+                set_error.set(None);
+                set_saved.set(true);
+                set_refresh.update(|n| *n += 1);
             } else {
-                set_save_error.set(Some(WRITE_ERROR.to_string()));
-            }
-        });
-    };
-
-    let on_transfer = move |ev: leptos::ev::SubmitEvent| {
-        ev.prevent_default();
-        let payload = TransferRepoOption {
-            new_owner: transfer_to.get(),
-        };
-        let o = owner();
-        let r = repo_name();
-        spawn_local(async move {
-            // Clear the target owner only after the transfer is accepted, so a
-            // rejected transfer keeps the typed username.
-            if post_json(&format!("/api/v1/repos/{}/{}/transfer", o, r), &payload).await {
-                set_transfer_to.set("".to_string());
-                set_save_error.set(None);
-            } else {
-                set_save_error.set(Some(WRITE_ERROR.to_string()));
-            }
-        });
-    };
-
-    let on_update_topics = move |ev: leptos::ev::SubmitEvent| {
-        ev.prevent_default();
-        let topic_list: Vec<String> = topics
-            .get()
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect();
-        let payload = RepoTopicOptions { topics: topic_list };
-        let o = owner();
-        let r = repo_name();
-        spawn_local(async move {
-            if put_json(&format!("/api/v1/repos/{}/{}/topics", o, r), &payload).await {
-                set_save_error.set(None);
-            } else {
-                set_save_error.set(Some(WRITE_ERROR.to_string()));
-            }
-        });
-    };
-
-    let on_sync = move |_| {
-        let o = owner();
-        let r = repo_name();
-        spawn_local(async move {
-            if post(&format!("/api/v1/repos/{}/{}/mirror-sync", o, r)).await {
-                set_save_error.set(None);
-            } else {
-                set_save_error.set(Some(WRITE_ERROR.to_string()));
+                set_saved.set(false);
+                set_error.set(Some(WRITE_ERROR.to_string()));
             }
         });
     };
@@ -135,457 +70,339 @@ pub fn RepoSettings() -> impl IntoView {
     view! {
         <div class="repo-settings">
             <RepoNav/>
-            <h3>"Repository Settings"</h3>
-            <form on:submit=on_submit>
-                <div>
+            <h3>"Settings"</h3>
+            {move || error.get().map(|msg| view! { <FormError message=msg/> })}
+            {move || saved.get().then(|| view! { <p class="flash-success">"Settings saved."</p> })}
+
+            <form class="panel" on:submit=on_save>
+                <div class="form-group">
                     <label>"Description"</label>
-                    <input type="text" prop:value=desc on:input=move |ev| set_desc.set(event_target_value(&ev)) />
+                    <textarea class="textarea-tall" prop:value=description
+                        on:input=move |ev| set_description.set(event_target_value(&ev))></textarea>
                 </div>
-                <div>
+                <div class="form-group">
                     <label>"Website"</label>
-                    <input type="text" prop:value=website on:input=move |ev| set_website.set(event_target_value(&ev)) />
+                    <input type="text" prop:value=website
+                        on:input=move |ev| set_website.set(event_target_value(&ev)) />
                 </div>
-                <div>
-                    <label>"Default Branch"</label>
-                    <input type="text" prop:value=default_branch on:input=move |ev| set_default_branch.set(event_target_value(&ev)) />
+                <div class="checkbox-group">
+                    <label>
+                        <input type="checkbox" prop:checked=private
+                            on:change=move |ev| set_private.set(event_target_checked(&ev)) />
+                        " Private"
+                    </label>
+                    <label>
+                        <input type="checkbox" prop:checked=has_issues
+                            on:change=move |ev| set_has_issues.set(event_target_checked(&ev)) />
+                        " Issues"
+                    </label>
+                    <label>
+                        <input type="checkbox" prop:checked=has_wiki
+                            on:change=move |ev| set_has_wiki.set(event_target_checked(&ev)) />
+                        " Wiki"
+                    </label>
+                    <label>
+                        <input type="checkbox" prop:checked=has_projects
+                            on:change=move |ev| set_has_projects.set(event_target_checked(&ev)) />
+                        " Projects"
+                    </label>
                 </div>
-
-                <div class="mb-1">
-                    <label><input type="checkbox" prop:checked=private on:change=move |ev| set_private.set(event_target_checked(&ev)) /> " Private Repository"</label>
+                <div class="form-actions">
+                    <button class="btn-primary" type="submit">"Save settings"</button>
                 </div>
-
-                <h4>"Merge Strategies"</h4>
-                <div><label><input type="checkbox" prop:checked=merge on:change=move |ev| set_merge.set(event_target_checked(&ev)) /> " Allow Merge Commits"</label></div>
-                <div><label><input type="checkbox" prop:checked=rebase on:change=move |ev| set_rebase.set(event_target_checked(&ev)) /> " Allow Rebase Merge"</label></div>
-                <div><label><input type="checkbox" prop:checked=squash on:change=move |ev| set_squash.set(event_target_checked(&ev)) /> " Allow Squash Merge"</label></div>
-
-                <h4>"Features"</h4>
-                <div><label><input type="checkbox" prop:checked=issues on:change=move |ev| set_issues.set(event_target_checked(&ev)) /> " Enable Issues"</label></div>
-                <div><label><input type="checkbox" prop:checked=wiki on:change=move |ev| set_wiki.set(event_target_checked(&ev)) /> " Enable Wiki"</label></div>
-                <div><label><input type="checkbox" prop:checked=projects on:change=move |ev| set_projects.set(event_target_checked(&ev)) /> " Enable Projects"</label></div>
-
-                <button type="submit" class="mt-3">"Update Settings"</button>
-                {move || save_error.get().map(|msg| view! {
-                    <p class="form-error" role="alert">{msg}</p>
-                })}
             </form>
 
-            <h4>"Topics"</h4>
-            <form on:submit=on_update_topics>
-                <input type="text" placeholder="rust, gitea, clone" prop:value=topics on:input=move |ev| set_topics.set(event_target_value(&ev)) />
-                <button type="submit">"Update Topics"</button>
-            </form>
-
-            <h4>"Mirror Settings"</h4>
-            <button on:click=on_sync>"Sync Now"</button>
-
-            <h4>"Transfer Ownership"</h4>
-            <form on:submit=on_transfer>
-                <input type="text" placeholder="New Owner Username" prop:value=transfer_to on:input=move |ev| set_transfer_to.set(event_target_value(&ev)) />
-                <button type="submit">"Transfer"</button>
-            </form>
-
-            <div class="settings-sections">
-                <p><a href="collaborators">"Collaborators"</a></p>
-                <p><a href="webhooks">"Webhooks"</a></p>
-                <p><a href="secrets">"Secrets"</a></p>
-                <p><a href="keys">"Deploy Keys"</a></p>
-                <p><a href="branches">"Protected Branches"</a></p>
-                <p><a href="lfs">"Git LFS Locks"</a></p>
-            </div>
+            <CollabList/>
+            <WebhookList/>
+            <SecretList/>
+            <DeployKeyList/>
+            <ProtectedBranchList/>
         </div>
     }
 }
 
+/// Collaborators with their permission level.
 #[component]
-pub fn CreateProtectedBranch(
-    owner: Signal<String>,
-    repo: Signal<String>,
-    on_success: Action<(), ()>,
-) -> impl IntoView {
-    let (name, set_name) = signal(String::new());
-    let (enable_push, set_enable_push) = signal(false);
-    let (enable_force_push, set_enable_force_push) = signal(false);
-    let (status_checks, set_status_checks) = signal(String::new());
-    let (branch_error, set_branch_error) = signal(Option::<String>::None);
+fn CollabList() -> impl IntoView {
+    let params = use_params_map();
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
+    let repo = move || params.with(|p| p.get("repo").unwrap_or_default());
+    let (refresh, set_refresh) = signal(0u32);
+    let (login, set_login) = signal(String::new());
+    let (permission, set_permission) = signal("write".to_string());
+    let (error, set_error) = signal(Option::<String>::None);
 
-    let create_action = Action::new_local(move |_: &()| {
-        let name_val = name.get();
-        let enable_push_val = enable_push.get();
-        let enable_force_push_val = enable_force_push.get();
-        let status_checks_str = status_checks.get();
+    let collaborators = local_resource(
+        move || (owner(), repo(), refresh.get()),
+        |(o, r, _)| async move {
+            get::<Vec<User>>(&format!("/api/v1/repos/{o}/{r}/collaborators")).await
+        },
+    );
 
-        let req_status_checks = if status_checks_str.trim().is_empty() {
-            None
-        } else {
-            Some(
-                status_checks_str
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect(),
-            )
+    let on_add = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let body = AddCollaboratorOption {
+            permission: Some(shared::RepoWritePermission::from_wire(&permission.get())),
         };
-
-        let opt = CreateProtectedBranchOption {
-            name: name_val,
-            enable_push: enable_push_val,
-            enable_force_push: enable_force_push_val,
-            required_status_checks: req_status_checks,
-        };
-
-        let o = owner.get();
-        let r = repo.get();
-        let on_success_clone = on_success;
-
-        async move {
-            if post_json(
-                &format!("/api/v1/repos/{}/{}/branch_protections", o, r),
-                &opt,
+        let o = owner();
+        let r = repo();
+        let target = login.get();
+        spawn(async move {
+            if put_json(
+                &format!("/api/v1/repos/{o}/{r}/collaborators/{target}"),
+                &body,
             )
             .await
             {
-                on_success_clone.dispatch(());
-                set_name.set(String::new());
-                set_enable_push.set(false);
-                set_enable_force_push.set(false);
-                set_status_checks.set(String::new());
-                set_branch_error.set(None);
+                set_error.set(None);
+                set_login.set(String::new());
+                set_refresh.update(|n| *n += 1);
             } else {
-                set_branch_error.set(Some(WRITE_ERROR.to_string()));
+                // Keep the typed username so the add can be retried.
+                set_error.set(Some(WRITE_ERROR.to_string()));
             }
-        }
-    });
+        });
+    };
 
     view! {
-        <div class="box create-protected-branch">
-            <h4>"Add Branch Protection Rule"</h4>
-            <form on:submit=move |ev| {
-                ev.prevent_default();
-                create_action.dispatch(());
-            }>
-                <div class="form-group">
-                    <label>"Branch Name Pattern"</label>
-                    <input type="text" placeholder="e.g. main, release-*" prop:value=name on:input=move |ev| set_name.set(event_target_value(&ev)) required />
-                </div>
-                <div class="form-group checkbox-group">
-                    <label>
-                        <input type="checkbox" prop:checked=enable_push on:change=move |ev| set_enable_push.set(event_target_checked(&ev)) />
-                        " Enable Push"
-                    </label>
-                </div>
-                <div class="form-group checkbox-group">
-                    <label>
-                        <input type="checkbox" prop:checked=enable_force_push on:change=move |ev| set_enable_force_push.set(event_target_checked(&ev)) />
-                        " Enable Force Push"
-                    </label>
-                </div>
-                <div class="form-group">
-                    <label>"Required Status Checks (comma separated)"</label>
-                    <input type="text" placeholder="e.g. ci/test, security-scan" prop:value=status_checks on:input=move |ev| set_status_checks.set(event_target_value(&ev)) />
-                </div>
-                <button type="submit" class="btn-primary">"Create Rule"</button>
-                {move || branch_error.get().map(|msg| view! {
-                    <p class="form-error" role="alert">{msg}</p>
-                })}
+        <section class="panel collaborators">
+            <h4>"Collaborators"</h4>
+            {move || error.get().map(|msg| view! { <FormError message=msg/> })}
+            <form class="flex-center gap-sm" on:submit=on_add>
+                <input class="input-lg" type="text" placeholder="Username"
+                    prop:value=login on:input=move |ev| set_login.set(event_target_value(&ev)) />
+                <select on:change=move |ev| set_permission.set(event_target_value(&ev))>
+                    <option value="read">"Read"</option>
+                    <option value="write">"Write"</option>
+                    <option value="admin">"Admin"</option>
+                </select>
+                <button class="btn-primary" type="submit">"Add collaborator"</button>
             </form>
-        </div>
-    }
-}
-
-#[component]
-pub fn ProtectedBranchList() -> impl IntoView {
-    let params = use_params_map();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
-    let repo_name = move || params.with(|params| params.get("repo").unwrap_or_default());
-    let owner_sig = Signal::derive(owner);
-    let repo_sig = Signal::derive(repo_name);
-
-    let (refetch_trigger, set_refetch_trigger) = signal(0);
-
-    let branches = local_resource(
-        move || (owner(), repo_name(), refetch_trigger.get()),
-        |(o, r, _)| async move {
-            get::<Vec<ProtectedBranch>>(&format!("/api/v1/repos/{}/{}/branch_protections", o, r))
-                .await
-        },
-    );
-
-    let on_success = Action::new_local(move |_: &()| {
-        set_refetch_trigger.update(|v| *v += 1);
-        async {}
-    });
-
-    view! {
-        <div class="protected-branches-page">
-        <RepoNav/>
-            <CreateProtectedBranch owner=owner_sig repo=repo_sig on_success=on_success/>
-            <div class="protected-branches">
-                <h3>"Protected Branches"</h3>
-                <ul>
-                    <Suspense fallback=move || view! { <li>"Loading..."</li> }>
-                        {move || branches.get().map(|list| view! {
-                            <For each=move || list.clone() key=|b| b.name.clone() children=move |b| {
-                                view! {
-                                    <li>
-                                        {b.name}
-                                        " (Push: " {b.enable_push}
-                                        ", Force: " {b.enable_force_push}
-                                        {if !b.required_status_checks.is_empty() {
-                                            format!(", Checks: {}", b.required_status_checks.join(", "))
-                                        } else {
-                                            "".to_string()
-                                        }}
-                                        ")"
-                                    </li>
-                                }
-                            }/>
-                        })}
-                    </Suspense>
-                </ul>
-            </div>
-        </div>
-    }
-}
-
-#[component]
-pub fn LfsLockList() -> impl IntoView {
-    let params = use_params_map();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
-    let repo_name = move || params.with(|params| params.get("repo").unwrap_or_default());
-
-    let locks = local_resource(
-        move || (owner(), repo_name()),
-        |(o, r)| async move {
-            get::<Vec<LfsLock>>(&format!("/api/v1/repos/{}/{}/git/lfs/locks", o, r)).await
-        },
-    );
-
-    view! {
-        <div class="lfs-locks">
-        <RepoNav/>
-            <h3>"Git LFS Locks"</h3>
-            <ul>
-                <Suspense fallback=move || view! { <li>"Loading..."</li> }>
-                    {move || locks.get().map(|list| view! {
-                        <For each=move || list.clone() key=|l| l.id.clone() children=move |l| {
-                            view! { <li>{l.path} " locked by " {l.owner.username}</li> }
-                        }/>
+            <ul class="item-list">
+                <Suspense fallback=|| view! { <Loading label="Loading collaborators…"/> }>
+                    {move || collaborators.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No collaborators."</li> }.into_any()
+                        } else {
+                            view! {
+                                <For each=move || list.clone() key=|u| u.id.unwrap_or(0) children=move |u| {
+                                    let login = u.login.clone().unwrap_or_default();
+                                    view! { <li><strong>{login}</strong></li> }
+                                }/>
+                            }.into_any()
+                        }
                     })}
                 </Suspense>
             </ul>
-        </div>
+        </section>
     }
 }
 
+/// Repository webhooks.
 #[component]
-pub fn WebhookList() -> impl IntoView {
+fn WebhookList() -> impl IntoView {
     let params = use_params_map();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
-    let repo_name = move || params.with(|params| params.get("repo").unwrap_or_default());
-
-    let (url, set_url) = signal("".to_string());
-    let (form_error, set_form_error) = signal(Option::<String>::None);
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
+    let repo = move || params.with(|p| p.get("repo").unwrap_or_default());
 
     let hooks = local_resource(
-        move || (owner(), repo_name()),
-        |(o, r)| async move { get::<Vec<Webhook>>(&format!("/api/v1/repos/{}/{}/hooks", o, r)).await },
+        move || (owner(), repo()),
+        |(o, r)| async move { get::<Vec<Hook>>(&format!("/api/v1/repos/{o}/{r}/hooks")).await },
     );
 
-    let on_create = move |ev: leptos::ev::SubmitEvent| {
-        ev.prevent_default();
-        let payload = CreateHookOption {
-            url: url.get(),
-            events: vec!["push".to_string()],
-            active: true,
-        };
-        let o = owner();
-        let r = repo_name();
-        spawn_local(async move {
-            if post_json(&format!("/api/v1/repos/{}/{}/hooks", o, r), &payload).await {
-                set_url.set("".to_string());
-                set_form_error.set(None);
-            } else {
-                set_form_error.set(Some(WRITE_ERROR.to_string()));
-            }
-        });
-    };
-
     view! {
-        <div class="webhook-list">
-        <RepoNav/>
-            <h3>"Webhooks"</h3>
-            <ul>
-                <Suspense fallback=move || view! { <li>"Loading..."</li> }>
-                    {move || hooks.get().map(|list| view! {
-                        <For each=move || list.clone() key=|h| h.id children=move |h| {
-                            let hook_id = h.id;
-                            let o = owner();
-                            let r = repo_name();
-                            let deliveries = local_resource(
-                                move || (o.clone(), r.clone(), hook_id),
-                                |(o, r, id)| async move {
-                                    get::<Vec<WebhookDelivery>>(&format!("/api/v1/repos/{}/{}/hooks/{}/deliveries", o, r, id)).await
-                                }
-                            );
-
+        <section class="panel webhook-list">
+            <h4>"Webhooks"</h4>
+            <ul class="item-list">
+                <Suspense fallback=|| view! { <Loading label="Loading webhooks…"/> }>
+                    {move || hooks.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No webhooks configured."</li> }.into_any()
+                        } else {
                             view! {
-                                <li class="list-row pb-1">
-                                    <div>
-                                        {h.url} " (" {if h.active { "Active" } else { "Inactive" }} ")"
-                                    </div>
-                                    <div class="deliveries">
-                                        <strong>"Recent Deliveries:"</strong>
-                                        <Suspense fallback=move || view! { <span>"..."</span> }>
-                                            {move || deliveries.get().map(|list| {
-                                                if list.is_empty() {
-                                                    view! { <div>"No deliveries yet"</div> }.into_any()
-                                                } else {
-                                                    view! {
-                                                        <ul class="indent-list">
-                                                            <For each=move || list.clone() key=|d| d.id children=move |d| {
-                                                                view! { <li>{d.delivered_at} " - " {d.event} " - " {d.status} " (" {d.response_status} ")"</li> }
-                                                            }/>
-                                                        </ul>
-                                                    }.into_any()
-                                                }
-                                            })}
-                                        </Suspense>
-                                    </div>
-                                </li>
-                            }
-                        }/>
+                                <For each=move || list.clone() key=|h| h.id.unwrap_or(0) children=move |h| {
+                                    let kind = h.type_.clone().unwrap_or_default();
+                                    let active = h.active.unwrap_or(false);
+                                    view! {
+                                        <li class="flex-between">
+                                            <span><strong>{kind}</strong></span>
+                                            <span class="label">{if active { "active" } else { "inactive" }}</span>
+                                        </li>
+                                    }
+                                }/>
+                            }.into_any()
+                        }
                     })}
                 </Suspense>
             </ul>
-            <h4>"Add Webhook"</h4>
-            <form on:submit=on_create>
-                <input type="text" placeholder="Payload URL" prop:value=url on:input=move |ev| set_url.set(event_target_value(&ev)) />
-                <button type="submit">"Add Webhook"</button>
-                {move || form_error.get().map(|msg| view! {
-                    <p class="form-error" role="alert">{msg}</p>
-                })}
-            </form>
-        </div>
+        </section>
     }
 }
 
+/// Repository actions secrets.
 #[component]
-pub fn SecretList() -> impl IntoView {
+fn SecretList() -> impl IntoView {
     let params = use_params_map();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
-    let repo_name = move || params.with(|params| params.get("repo").unwrap_or_default());
-
-    let (name, set_name) = signal("".to_string());
-    let (data, set_data) = signal("".to_string());
-    let (form_error, set_form_error) = signal(Option::<String>::None);
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
+    let repo = move || params.with(|p| p.get("repo").unwrap_or_default());
+    let (refresh, set_refresh) = signal(0u32);
+    let (name, set_name) = signal(String::new());
+    let (data, set_data) = signal(String::new());
+    let (error, set_error) = signal(Option::<String>::None);
 
     let secrets = local_resource(
-        move || (owner(), repo_name()),
-        |(o, r)| async move { get::<Vec<Secret>>(&format!("/api/v1/repos/{}/{}/secrets", o, r)).await },
+        move || (owner(), repo(), refresh.get()),
+        |(o, r, _)| async move {
+            get::<Vec<Secret>>(&format!("/api/v1/repos/{o}/{r}/actions/secrets")).await
+        },
     );
 
-    let on_create = move |ev: leptos::ev::SubmitEvent| {
+    let on_add = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
-        let payload = CreateSecretOption {
-            name: name.get(),
+        let body = shared::CreateOrUpdateSecretOption {
             data: data.get(),
+            description: Some(String::new()),
         };
         let o = owner();
-        let r = repo_name();
-        spawn_local(async move {
-            if post_json(&format!("/api/v1/repos/{}/{}/secrets", o, r), &payload).await {
-                set_name.set("".to_string());
-                set_data.set("".to_string());
-                set_form_error.set(None);
+        let r = repo();
+        let target = name.get();
+        spawn(async move {
+            if put_json(
+                &format!("/api/v1/repos/{o}/{r}/actions/secrets/{target}"),
+                &body,
+            )
+            .await
+            {
+                set_error.set(None);
+                set_name.set(String::new());
+                set_data.set(String::new());
+                set_refresh.update(|n| *n += 1);
             } else {
-                set_form_error.set(Some(WRITE_ERROR.to_string()));
+                set_error.set(Some(WRITE_ERROR.to_string()));
             }
         });
     };
 
     view! {
-        <div class="secret-list">
-        <RepoNav/>
-            <h3>"Secrets"</h3>
-            <ul>
-                <Suspense fallback=move || view! { <li>"Loading..."</li> }>
-                    {move || secrets.get().map(|list| view! {
-                        <For each=move || list.clone() key=|s| s.name.clone() children=move |s| {
-                            view! { <li>{s.name}</li> }
-                        }/>
+        <section class="panel secret-list">
+            <h4>"Actions secrets"</h4>
+            {move || error.get().map(|msg| view! { <FormError message=msg/> })}
+            <form class="flex-center gap-sm" on:submit=on_add>
+                <input class="input-lg" type="text" placeholder="Secret name"
+                    prop:value=name on:input=move |ev| set_name.set(event_target_value(&ev)) />
+                <input class="input-lg" type="password" placeholder="Value"
+                    prop:value=data on:input=move |ev| set_data.set(event_target_value(&ev)) />
+                <button class="btn-primary" type="submit">"Add secret"</button>
+            </form>
+            <ul class="item-list">
+                <Suspense fallback=|| view! { <Loading label="Loading secrets…"/> }>
+                    {move || secrets.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No secrets configured."</li> }.into_any()
+                        } else {
+                            view! {
+                                <For each=move || list.clone() key=|s| s.name.clone().unwrap_or_default() children=move |s| {
+                                    let name = s.name.clone().unwrap_or_default();
+                                    let created = s.created_at.clone().unwrap_or_default();
+                                    view! { <li><strong>{name}</strong> <span class="text-small text-muted">{created}</span></li> }
+                                }/>
+                            }.into_any()
+                        }
                     })}
                 </Suspense>
             </ul>
-            <h4>"Add Secret"</h4>
-            <form on:submit=on_create>
-                <input type="text" placeholder="Name" prop:value=name on:input=move |ev| set_name.set(event_target_value(&ev)) />
-                <input type="text" placeholder="Value" prop:value=data on:input=move |ev| set_data.set(event_target_value(&ev)) />
-                <button type="submit">"Add Secret"</button>
-                {move || form_error.get().map(|msg| view! {
-                    <p class="form-error" role="alert">{msg}</p>
-                })}
-            </form>
-        </div>
+        </section>
     }
 }
 
+/// Deploy keys.
 #[component]
-pub fn DeployKeyList() -> impl IntoView {
+fn DeployKeyList() -> impl IntoView {
     let params = use_params_map();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
-    let repo_name = move || params.with(|params| params.get("repo").unwrap_or_default());
-
-    let (title, set_title) = signal("".to_string());
-    let (key, set_key) = signal("".to_string());
-    let (form_error, set_form_error) = signal(Option::<String>::None);
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
+    let repo = move || params.with(|p| p.get("repo").unwrap_or_default());
 
     let keys = local_resource(
-        move || (owner(), repo_name()),
-        |(o, r)| async move { get::<Vec<DeployKey>>(&format!("/api/v1/repos/{}/{}/keys", o, r)).await },
+        move || (owner(), repo()),
+        |(o, r)| async move { get::<Vec<DeployKey>>(&format!("/api/v1/repos/{o}/{r}/keys")).await },
     );
 
-    let on_create = move |ev: leptos::ev::SubmitEvent| {
-        ev.prevent_default();
-        let payload = CreateKeyOption {
-            title: title.get(),
-            key: key.get(),
-        };
-        let o = owner();
-        let r = repo_name();
-        spawn_local(async move {
-            if post_json(&format!("/api/v1/repos/{}/{}/keys", o, r), &payload).await {
-                set_title.set("".to_string());
-                set_key.set("".to_string());
-                set_form_error.set(None);
-            } else {
-                set_form_error.set(Some(WRITE_ERROR.to_string()));
-            }
-        });
-    };
-
     view! {
-        <div class="deploy-key-list">
-        <RepoNav/>
-            <h3>"Deploy Keys"</h3>
-            <ul>
-                <Suspense fallback=move || view! { <li>"Loading..."</li> }>
-                    {move || keys.get().map(|list| view! {
-                        <For each=move || list.clone() key=|k| k.id children=move |k| {
-                            view! { <li>{k.title} " - " {k.fingerprint}</li> }
-                        }/>
+        <section class="panel deploy-key-list">
+            <h4>"Deploy keys"</h4>
+            <ul class="item-list">
+                <Suspense fallback=|| view! { <Loading label="Loading keys…"/> }>
+                    {move || keys.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No deploy keys."</li> }.into_any()
+                        } else {
+                            view! {
+                                <For each=move || list.clone() key=|k| k.id.unwrap_or(0) children=move |k| {
+                                    let title = k.title.clone().unwrap_or_default();
+                                    let fingerprint = k.fingerprint.clone().unwrap_or_default();
+                                    let read_only = k.read_only.unwrap_or(false);
+                                    view! {
+                                        <li class="flex-between">
+                                            <span><strong>{title}</strong> <code class="text-small">{fingerprint}</code></span>
+                                            <span class="label">{if read_only { "read-only" } else { "read-write" }}</span>
+                                        </li>
+                                    }
+                                }/>
+                            }.into_any()
+                        }
                     })}
                 </Suspense>
             </ul>
-            <h4>"Add Deploy Key"</h4>
-            <form on:submit=on_create>
-                <input type="text" placeholder="Title" prop:value=title on:input=move |ev| set_title.set(event_target_value(&ev)) />
-                <textarea placeholder="Key" prop:value=key on:input=move |ev| set_key.set(event_target_value(&ev))></textarea>
-                <button type="submit">"Add Key"</button>
-                {move || form_error.get().map(|msg| view! {
-                    <p class="form-error" role="alert">{msg}</p>
-                })}
-            </form>
-        </div>
+        </section>
+    }
+}
+
+/// Branch protection rules.
+#[component]
+fn ProtectedBranchList() -> impl IntoView {
+    let params = use_params_map();
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
+    let repo = move || params.with(|p| p.get("repo").unwrap_or_default());
+
+    let protections = local_resource(
+        move || (owner(), repo()),
+        |(o, r)| async move {
+            get::<Vec<shared::BranchProtection>>(&format!(
+                "/api/v1/repos/{o}/{r}/branch_protections"
+            ))
+            .await
+        },
+    );
+
+    view! {
+        <section class="panel protected-branches">
+            <h4>"Protected branches"</h4>
+            <ul class="item-list">
+                <Suspense fallback=|| view! { <Loading label="Loading rules…"/> }>
+                    {move || protections.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No protected branches."</li> }.into_any()
+                        } else {
+                            view! {
+                                <For each=move || list.clone() key=|p| p.branch_name.clone().unwrap_or_default() children=move |p| {
+                                    let name = p.branch_name.clone().unwrap_or_default();
+                                    let approvals = p.required_approvals.unwrap_or(0);
+                                    let push = p.enable_push.unwrap_or(false);
+                                    view! {
+                                        <li class="flex-between">
+                                            <span><strong>{name}</strong></span>
+                                            <span class="text-small text-muted">
+                                                {approvals} " required approvals · "
+                                                {if push { "push enabled" } else { "push disabled" }}
+                                            </span>
+                                        </li>
+                                    }
+                                }/>
+                            }.into_any()
+                        }
+                    })}
+                </Suspense>
+            </ul>
+        </section>
     }
 }

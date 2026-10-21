@@ -19,8 +19,8 @@ def wait_for_server():
 
 def test_invalid_discussion_comment():
     print("Verifying Bug Fix 1: Invalid Discussion ID...")
-    repo_owner = "admin"
-    repo_name = "codeza"
+    repo_owner = "codez-org"
+    repo_name = "codez"
 
     # Try to create comment on non-existent discussion ID 9999
     print("\nTesting POST /repos/:owner/:repo/discussions/9999/comments...")

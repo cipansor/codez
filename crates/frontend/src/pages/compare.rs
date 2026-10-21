@@ -1,37 +1,52 @@
-use crate::api::{get, local_resource, post_json_resp, WRITE_ERROR};
-use crate::components::RepoNav;
+//! Branch comparison and pull-request creation.
+
+use crate::api::{get, local_resource, post_json_resp, spawn, WRITE_ERROR};
+use crate::components::{FormError, RepoNav};
 use leptos::prelude::*;
-use leptos::task::spawn_local;
 use leptos_router::hooks::*;
 use shared::{Branch, CreatePullRequestOption, PullRequest};
 
+/// `/repos/:owner/:repo/compare` — pick a base and head branch, then open a
+/// pull request from them.
 #[component]
 pub fn CompareView() -> impl IntoView {
     let params = use_params_map();
     let navigate = use_navigate();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
-    let repo_name = move || params.with(|params| params.get("repo").unwrap_or_default());
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
+    let repo = move || params.with(|p| p.get("repo").unwrap_or_default());
 
-    let (base_branch, set_base_branch) = signal("main".to_string());
-    let (compare_branch, set_compare_branch) = signal("".to_string());
-    let (title, set_title) = signal("".to_string());
-    let (body, set_body) = signal("".to_string());
-    let (error_msg, set_error_msg) = signal(None::<String>);
+    let (base_branch, set_base_branch) = signal(String::new());
+    let (head_branch, set_head_branch) = signal(String::new());
+    let (title, set_title) = signal(String::new());
+    let (body, set_body) = signal(String::new());
+    let (error, set_error) = signal(Option::<String>::None);
 
     let branches = local_resource(
-        move || (owner(), repo_name()),
-        |(o, r)| async move { get::<Vec<Branch>>(&format!("/api/v1/repos/{}/{}/branches", o, r)).await },
+        move || (owner(), repo()),
+        |(o, r)| async move { get::<Vec<Branch>>(&format!("/api/v1/repos/{o}/{r}/branches")).await },
     );
 
-    // Set default compare branch when branches load
+    // Seed the selectors once the branch list arrives: the repository's default
+    // branch (or `main`) as the base, the first other branch as the head.
     Effect::new(move |_| {
         if let Some(list) = branches.get() {
-            if compare_branch.get().is_empty() && !list.is_empty() {
-                // Default to the last branch that isn't main, or just the last one
-                if let Some(b) = list.iter().find(|b| b.name != "main") {
-                    set_compare_branch.set(b.name.clone());
-                } else if let Some(first) = list.first() {
-                    set_compare_branch.set(first.name.clone());
+            if base_branch.get_untracked().is_empty() {
+                if let Some(name) = list
+                    .iter()
+                    .find(|b| b.name.as_deref() == Some("main"))
+                    .or_else(|| list.first())
+                    .and_then(|b| b.name.clone())
+                {
+                    set_base_branch.set(name);
+                }
+            }
+            if head_branch.get_untracked().is_empty() {
+                if let Some(name) = list
+                    .iter()
+                    .find(|b| b.name.as_deref() != Some(base_branch.get_untracked().as_str()))
+                    .and_then(|b| b.name.clone())
+                {
+                    set_head_branch.set(name);
                 }
             }
         }
@@ -39,89 +54,86 @@ pub fn CompareView() -> impl IntoView {
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
-        let payload = CreatePullRequestOption {
-            title: title.get(),
-            body: Some(body.get()),
-            head: compare_branch.get(),
-            base: base_branch.get(),
-        };
-
-        if payload.head == payload.base {
-            set_error_msg.set(Some(
-                "Base and Compare branches must be different.".to_string(),
+        let base = base_branch.get();
+        let head = head_branch.get();
+        if base == head {
+            set_error.set(Some(
+                "Base and compare branches must be different.".to_string(),
             ));
             return;
         }
-
+        let payload = CreatePullRequestOption {
+            title: Some(title.get()),
+            body: Some(body.get()),
+            head: Some(head),
+            base: Some(base),
+            ..Default::default()
+        };
         let o = owner();
-        let r = repo_name();
+        let r = repo();
         let navigate = navigate.clone();
-        spawn_local(async move {
+        spawn(async move {
             match post_json_resp::<_, PullRequest>(
-                &format!("/api/v1/repos/{}/{}/pulls", o, r),
+                &format!("/api/v1/repos/{o}/{r}/pulls"),
                 &payload,
             )
             .await
             {
-                Some(pr) => navigate(
-                    &format!("/repos/{}/{}/pulls/{}", o, r, pr.number),
-                    Default::default(),
-                ),
-                None => set_error_msg.set(Some(WRITE_ERROR.to_string())),
+                Some(pr) => {
+                    set_error.set(None);
+                    let number = pr.number.unwrap_or(0);
+                    navigate(
+                        &format!("/repos/{o}/{r}/pulls/{number}"),
+                        Default::default(),
+                    );
+                }
+                // Keep the typed title and body on a rejected write.
+                None => set_error.set(Some(WRITE_ERROR.to_string())),
             }
         });
     };
 
     view! {
         <div class="compare-view">
-        <RepoNav/>
+            <RepoNav/>
             <h3>"Compare changes"</h3>
-            <p>"Choose two branches to see what’s changed or to start a new pull request."</p>
+            <p class="text-muted">"Choose two branches to see what's changed, or open a pull request."</p>
+            {move || error.get().map(|msg| view! { <FormError message=msg/> })}
 
-            <div class="branch-selector">
-                 <Suspense fallback=move || view! { <span>"Loading branches..."</span> }>
-                    {move || branches.get().map(|list| {
-                        let list2 = list.clone();
-                        view! {
-                        <div class="flex-center gap-lg">
-                            <div>
-                                <label class="mr-1">"Base: "</label>
-                                <select on:change=move |ev| set_base_branch.set(event_target_value(&ev))>
-                                    <For each=move || list.clone() key=|b| b.name.clone() children=move |b| {
-                                        let selected = b.name == base_branch.get();
-                                        view! { <option value={b.name.clone()} selected={selected}>{b.name.clone()}</option> }
-                                    }/>
-                                </select>
-                            </div>
-                            <div>"←"</div>
-                            <div>
-                                <label class="mr-1">"Compare: "</label>
-                                <select on:change=move |ev| set_compare_branch.set(event_target_value(&ev))>
-                                    <For each=move || list2.clone() key=|b| b.name.clone() children=move |b| {
-                                        let selected = b.name == compare_branch.get();
-                                        view! { <option value={b.name.clone()} selected={selected}>{b.name.clone()}</option> }
-                                    }/>
-                                </select>
-                            </div>
-                        </div>
-                    }})}
-                </Suspense>
-            </div>
-
-            {move || error_msg.get().map(|msg| view! {
-                <p class="form-error" role="alert">{msg}</p>
-            })}
-
-            <form on:submit=on_submit class="pr-form">
-                <div class="mb-1">
-                    <input type="text" placeholder="Title" prop:value=title on:input=move |ev| set_title.set(event_target_value(&ev)) class="input-lg" required />
+            <form class="panel" on:submit=on_submit>
+                <div class="form-group">
+                    <label>"Base branch"</label>
+                    <select on:change=move |ev| set_base_branch.set(event_target_value(&ev))>
+                        {move || branches.get().unwrap_or_default().into_iter().map(|b| {
+                            let name = b.name.clone().unwrap_or_default();
+                            let selected = name == base_branch.get();
+                            view! { <option value=name.clone() selected=selected>{name.clone()}</option> }
+                        }).collect_view()}
+                    </select>
                 </div>
-                <div class="mb-1">
-                    <textarea placeholder="Leave a comment" prop:value=body on:input=move |ev| set_body.set(event_target_value(&ev)) rows="10" class="p-1"></textarea>
+                <div class="form-group">
+                    <label>"Compare branch"</label>
+                    <select on:change=move |ev| set_head_branch.set(event_target_value(&ev))>
+                        {move || branches.get().unwrap_or_default().into_iter().map(|b| {
+                            let name = b.name.clone().unwrap_or_default();
+                            let selected = name == head_branch.get();
+                            view! { <option value=name.clone() selected=selected>{name.clone()}</option> }
+                        }).collect_view()}
+                    </select>
                 </div>
-                <button type="submit" class="btn-primary">
-                    "Create Pull Request"
-                </button>
+                <div class="form-group">
+                    <label>"Title"</label>
+                    <input type="text" prop:value=title
+                        on:input=move |ev| set_title.set(event_target_value(&ev)) />
+                </div>
+                <div class="form-group">
+                    <label>"Description"</label>
+                    <textarea class="textarea-tall" prop:value=body
+                        on:input=move |ev| set_body.set(event_target_value(&ev))></textarea>
+                </div>
+                <div class="form-actions">
+                    <button class="btn-primary" type="submit">"Create pull request"</button>
+                </div>
             </form>
         </div>
     }

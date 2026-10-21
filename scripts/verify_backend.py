@@ -7,68 +7,59 @@ BASE_URL = "http://127.0.0.1:3000/api/v1"
 def test_backend():
     print("Verifying Backend Endpoints...")
 
-    # 1. List User Issues
-    print("\nTesting GET /user/issues...")
+    # 1. List issues across the instance
+    # Gitea exposes no /user/issues endpoint; the spec equivalent is the
+    # cross-repo issue search at /repos/issues/search.
+    print("\nTesting GET /repos/issues/search...")
     try:
-        # We need to create an issue assigned to 'admin' (id=1) first because mock might be empty or specific
-        # Create issue
-        repo_owner = "admin"
-        repo_name = "codeza"
+        repo_owner = "codez-org"
+        repo_name = "codez"
         issue_payload = {"title": "Verification Issue", "body": "To test list"}
         r = requests.post(f"{BASE_URL}/repos/{repo_owner}/{repo_name}/issues", json=issue_payload)
         r.raise_for_status()
         issue = r.json()
         print(f"Created Issue: {issue['id']}")
 
-        # Assign to admin
-        user_payload = {"id": 1, "username": "admin", "email": None}
-        r = requests.post(f"{BASE_URL}/repos/{repo_owner}/{repo_name}/issues/{issue['id']}/assignees", json=user_payload)
-        r.raise_for_status()
-        print("Assigned to admin")
-
-        # Now list user issues
-        r = requests.get(f"{BASE_URL}/user/issues?state=open")
+        # Search for the issue we just created.
+        r = requests.get(f"{BASE_URL}/repos/issues/search?state=open&type=issues")
         r.raise_for_status()
         issues = r.json()
-        print(f"User Issues Count: {len(issues)}")
+        print(f"Issue Search Count: {len(issues)}")
 
         found = any(i['title'] == "Verification Issue" for i in issues)
         if found:
-            print("SUCCESS: Found assigned issue in list")
+            print("SUCCESS: Found created issue in search results")
         else:
-            print("FAILURE: Did not find assigned issue")
-            # print(json.dumps(issues, indent=2))
+            print("FAILURE: Did not find created issue")
             sys.exit(1)
 
     except Exception as e:
-        print(f"Error testing user issues: {e}")
+        print(f"Error testing issue search: {e}")
         sys.exit(1)
 
-    # 2. List User Pull Requests
-    print("\nTesting GET /user/pulls...")
+    # 2. List pull requests across the instance (search with type=pulls).
+    print("\nTesting GET /repos/issues/search?type=pulls...")
     try:
-        # Create PR (admin is default creator)
         pr_payload = {"title": "Verification PR", "body": "Body", "head": "feature", "base": "main"}
         r = requests.post(f"{BASE_URL}/repos/{repo_owner}/{repo_name}/pulls", json=pr_payload)
         r.raise_for_status()
         pr = r.json()
         print(f"Created PR: {pr['id']}")
 
-        # List user pulls
-        r = requests.get(f"{BASE_URL}/user/pulls?state=open")
+        r = requests.get(f"{BASE_URL}/repos/issues/search?state=open&type=pulls")
         r.raise_for_status()
         pulls = r.json()
-        print(f"User Pulls Count: {len(pulls)}")
+        print(f"Pull Search Count: {len(pulls)}")
 
         found = any(p['title'] == "Verification PR" for p in pulls)
         if found:
-            print("SUCCESS: Found created PR in list")
+            print("SUCCESS: Found created PR in search results")
         else:
             print("FAILURE: Did not find created PR")
             sys.exit(1)
 
     except Exception as e:
-        print(f"Error testing user pulls: {e}")
+        print(f"Error testing pull search: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

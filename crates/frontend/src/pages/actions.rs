@@ -1,40 +1,137 @@
-use crate::api::{delete, get, local_resource, patch_json, post, post_json, WRITE_ERROR};
-use crate::components::RepoNav;
-use leptos::prelude::*;
-use leptos::task::spawn_local;
-use leptos_router::hooks::*;
-use shared::{ActionWorkflow, CreateWorkflowRunOption, UpdateWorkflowRunOption, WorkflowRun};
+//! Actions (CI/CD) pages: repository workflows and their runs.
+//!
+//! Workflows are discovered from the repository's workflow directory and runs
+//! are recorded by the backend, so these pages list real state. A workflow can
+//! be dispatched from here, which queues the run the runner fleet would pick
+//! up; executing the job itself still needs an actual runner.
 
+use crate::api::{get, local_resource, post_json, spawn, WRITE_ERROR};
+use crate::components::{FormError, Loading, RepoNav};
+use leptos::prelude::*;
+use leptos_router::hooks::*;
+use shared::{ActionWorkflow, ActionWorkflowRun};
+
+/// The `ActionsListWorkflowRuns` document: a page of workflow runs.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct WorkflowRunsPage {
+    #[serde(default)]
+    pub workflow_runs: Vec<ActionWorkflowRun>,
+}
+
+/// The `ActionsListWorkflows` document: the workflows of one repository.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct WorkflowsPage {
+    #[serde(default)]
+    pub workflows: Vec<ActionWorkflow>,
+}
+
+/// `/repos/:owner/:repo/actions` — the workflows defined in the repository.
 #[component]
 pub fn ActionsList() -> impl IntoView {
     let params = use_params_map();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
-    let repo_name = move || params.with(|params| params.get("repo").unwrap_or_default());
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
+    let repo = move || params.with(|p| p.get("repo").unwrap_or_default());
+
+    // Bumped after a dispatch so the run list refreshes without a reload.
+    let (refresh, set_refresh) = signal(0u32);
+    let (error, set_error) = signal(Option::<String>::None);
 
     let workflows = local_resource(
-        move || (owner(), repo_name()),
+        move || (owner(), repo()),
         |(o, r)| async move {
-            get::<Vec<ActionWorkflow>>(&format!("/api/v1/repos/{}/{}/actions/workflows", o, r))
+            get::<WorkflowsPage>(&format!("/api/v1/repos/{o}/{r}/actions/workflows"))
                 .await
+                .workflows
         },
     );
 
+    let runs = local_resource(
+        move || (owner(), repo(), refresh.get()),
+        |(o, r, _)| async move {
+            get::<WorkflowRunsPage>(&format!("/api/v1/repos/{o}/{r}/actions/runs"))
+                .await
+                .workflow_runs
+        },
+    );
+
+    let dispatch = move |id: String| {
+        let o = owner();
+        let r = repo();
+        spawn(async move {
+            let url = format!("/api/v1/repos/{o}/{r}/actions/workflows/{id}/dispatches");
+            if post_json(&url, &serde_json::json!({})).await {
+                set_error.set(None);
+                set_refresh.update(|n| *n += 1);
+            } else {
+                set_error.set(Some(WRITE_ERROR.to_string()));
+            }
+        });
+    };
+
     view! {
         <div class="actions-list">
-        <RepoNav/>
-            <h3>"Actions Workflows"</h3>
-            <ul>
-                <Suspense fallback=move || view! { <li>"Loading workflows..."</li> }>
-                    {move || workflows.get().map(|list| view! {
-                        <For each=move || list.clone() key=|w| w.id children=move |w| {
-                            let href = format!("/repos/{}/{}/actions/workflows/{}", owner(), repo_name(), w.id);
+            <RepoNav/>
+            <h3>"Workflows"</h3>
+            {move || error.get().map(|msg| view! { <FormError message=msg/> })}
+            <p class="text-muted">
+                "Workflows are read from the repository's "
+                <code>".gitea/workflows"</code>
+                " directory. Dispatching one queues a run; executing the job itself "
+                "needs a runner to pick it up."
+            </p>
+            <ul class="item-list panel">
+                <Suspense fallback=|| view! { <Loading label="Loading workflows…"/> }>
+                    {move || workflows.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No workflows defined."</li> }.into_any()
+                        } else {
                             view! {
-                                <li>
-                                    <a href=href><strong>{w.name}</strong></a>
-                                    " - " {w.status}
-                                </li>
-                            }
-                        }/>
+                                <For each=move || list.clone() key=|w| w.id.clone().unwrap_or_default() children=move |w| {
+                                    let name = w.name.clone().or_else(|| w.id.clone()).unwrap_or_default();
+                                    let path = w.path.clone().unwrap_or_default();
+                                    let state = w.state.clone().unwrap_or_default();
+                                    let dispatch_id = w.id.clone().unwrap_or_default();
+                                    view! {
+                                        <li class="flex-between">
+                                            <span><strong>{name}</strong> <code>{path}</code></span>
+                                            <span class="run-actions">
+                                                <span class="label">{state}</span>
+                                                <button class="btn-sm" type="button"
+                                                    on:click=move |_| dispatch(dispatch_id.clone())>
+                                                    "Dispatch"
+                                                </button>
+                                            </span>
+                                        </li>
+                                    }
+                                }/>
+                            }.into_any()
+                        }
+                    })}
+                </Suspense>
+            </ul>
+
+            <h3 class="mt-3">"Recent runs"</h3>
+            <ul class="runs-list item-list panel">
+                <Suspense fallback=|| view! { <Loading label="Loading runs…"/> }>
+                    {move || runs.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No workflow runs."</li> }.into_any()
+                        } else {
+                            view! {
+                                <For each=move || list.clone() key=|r| r.id.unwrap_or(0) children=move |run| {
+                                    let title = run.display_title.clone().unwrap_or_default();
+                                    let status = run.status.clone().unwrap_or_default();
+                                    let conclusion = run.conclusion.clone().unwrap_or_default();
+                                    view! {
+                                        <li>
+                                            <span class="run-status">{status}</span>
+                                            <strong>{title}</strong>
+                                            <span class="text-small text-muted">" " {conclusion}</span>
+                                        </li>
+                                    }
+                                }/>
+                            }.into_any()
+                        }
                     })}
                 </Suspense>
             </ul>
@@ -42,171 +139,52 @@ pub fn ActionsList() -> impl IntoView {
     }
 }
 
+/// `/repos/:owner/:repo/actions/workflows/:id` — the runs of one workflow.
 #[component]
 pub fn WorkflowRunsList() -> impl IntoView {
     let params = use_params_map();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
-    let repo_name = move || params.with(|params| params.get("repo").unwrap_or_default());
-    let workflow_id = move || {
-        params.with(|params| {
-            params
-                .get("id")
-                .unwrap_or_default()
-                .parse::<u64>()
-                .unwrap_or_default()
-        })
-    };
-
-    let (refresh, set_refresh) = signal(0);
-    let (action_error, set_action_error) = signal(Option::<String>::None);
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
+    let repo = move || params.with(|p| p.get("repo").unwrap_or_default());
+    let workflow = move || params.with(|p| p.get("id").unwrap_or_default());
 
     let runs = local_resource(
-        move || (owner(), repo_name(), workflow_id(), refresh.get()),
-        |(o, r, id, _)| async move {
-            get::<Vec<WorkflowRun>>(&format!(
-                "/api/v1/repos/{}/{}/actions/workflows/{}/runs",
-                o, r, id
-            ))
-            .await
+        move || (owner(), repo(), workflow()),
+        |(o, r, w)| async move {
+            get::<WorkflowRunsPage>(&format!("/api/v1/repos/{o}/{r}/actions/workflows/{w}/runs"))
+                .await
+                .workflow_runs
         },
     );
 
-    let on_run_workflow = move |_| {
-        let o = owner();
-        let r = repo_name();
-        let id = workflow_id();
-        let payload = CreateWorkflowRunOption {
-            workflow_id: id,
-            ref_name: "main".to_string(), // hardcoded for MVP
-        };
-        spawn_local(async move {
-            if post_json(
-                &format!("/api/v1/repos/{}/{}/actions/workflows/{}/runs", o, r, id),
-                &payload,
-            )
-            .await
-            {
-                set_action_error.set(None);
-                set_refresh.update(|n| *n += 1);
-            } else {
-                set_action_error.set(Some(WRITE_ERROR.to_string()));
-            }
-        });
-    };
-
-    let on_rerun_workflow = move |run_id: u64| {
-        let o = owner();
-        let r = repo_name();
-        spawn_local(async move {
-            if post(&format!(
-                "/api/v1/repos/{}/{}/actions/runs/{}/rerun",
-                o, r, run_id
-            ))
-            .await
-            {
-                set_action_error.set(None);
-                set_refresh.update(|n| *n += 1);
-            } else {
-                set_action_error.set(Some(WRITE_ERROR.to_string()));
-            }
-        });
-    };
-
-    let on_cancel_run = move |run_id: u64| {
-        let o = owner();
-        let r = repo_name();
-        let payload = UpdateWorkflowRunOption {
-            status: "cancelled".to_string(),
-        };
-        spawn_local(async move {
-            if patch_json(
-                &format!("/api/v1/repos/{}/{}/actions/runs/{}", o, r, run_id),
-                &payload,
-            )
-            .await
-            {
-                set_action_error.set(None);
-                set_refresh.update(|n| *n += 1);
-            } else {
-                set_action_error.set(Some(WRITE_ERROR.to_string()));
-            }
-        });
-    };
-
-    let on_delete_run = move |run_id: u64| {
-        let o = owner();
-        let r = repo_name();
-        spawn_local(async move {
-            if delete(&format!(
-                "/api/v1/repos/{}/{}/actions/runs/{}",
-                o, r, run_id
-            ))
-            .await
-            {
-                set_action_error.set(None);
-                set_refresh.update(|n| *n += 1);
-            } else {
-                set_action_error.set(Some(WRITE_ERROR.to_string()));
-            }
-        });
-    };
-
     view! {
         <div class="workflow-runs">
-        <RepoNav/>
-            <div class="header">
-                <h3>"Workflow Runs"</h3>
-                <button class="run-workflow-btn" on:click=on_run_workflow>"Run Workflow"</button>
-                {move || action_error.get().map(|msg| view! {
-                    <p class="form-error" role="alert">{msg}</p>
-                })}
+            <RepoNav/>
+            <div class="page-header">
+                <h3>"Runs for " <code>{workflow}</code></h3>
             </div>
-            <ul class="runs-list">
-                <Suspense fallback=move || view! { <li>"Loading runs..."</li> }>
-                    {move || runs.get().map(|list| view! {
-                        <For each=move || list.clone() key=|r| r.id children=move |r| {
-                            let status = r.status.clone();
-                            let is_active = status == "queued" || status == "in_progress";
-                            let run_id = r.id;
-                            let step_logs = r.step_logs.clone();
-                            let on_cancel = { move |_| on_cancel_run(run_id) };
-                            let on_delete = { move |_| on_delete_run(run_id) };
-                            let on_rerun = { move |_| on_rerun_workflow(run_id) };
+            {move || runs.get().is_some_and(|r| r.is_empty()).then(|| view! {
+                <FormError message="No runs for this workflow yet. Dispatch it from the repository Actions page.".to_string()/>
+            })}
+            <ul class="runs-list item-list panel">
+                <Suspense fallback=|| view! { <Loading label="Loading runs…"/> }>
+                    {move || runs.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No runs for this workflow."</li> }.into_any()
+                        } else {
                             view! {
-                                <li class="run-item">
-                                    <div class="flex-between">
-                                        <span>"Run #" {r.id} " - " <span class="run-status">{r.status}</span> " (" {r.created_at} ")"</span>
-                                        <div class="flex gap-sm">
-                                            <button class="rerun-btn" on:click=on_rerun>"Re-run"</button>
-                                            {if is_active {
-                                                view! { <button class="cancel-run-btn" on:click=on_cancel>"Cancel"</button> }.into_any()
-                                            } else {
-                                                view! { <button class="delete-run-btn" on:click=on_delete>"Delete"</button> }.into_any()
-                                            }}
-                                        </div>
-                                    </div>
-                                    {if !step_logs.is_empty() {
-                                        view! {
-                                            <div class="log-viewer">
-                                                <For each=move || step_logs.clone() key=|s| s.name.clone() children=move |s| {
-                                                    let logs = s.logs.clone();
-                                                    view! {
-                                                        <div class="log-step">
-                                                            <div class="log-step-title">"▶ " {s.name} " (" {s.status} ")"</div>
-                                                            <For each=move || logs.clone() key=|l| l.clone() children=move |l| {
-                                                                view! { <div class="log-line">{l}</div> }
-                                                            }/>
-                                                        </div>
-                                                    }
-                                                }/>
-                                            </div>
-                                        }.into_any()
-                                    } else {
-                                        view! { <span></span> }.into_any()
-                                    }}
-                                </li>
-                            }
-                        }/>
+                                <For each=move || list.clone() key=|r| r.id.unwrap_or(0) children=move |run| {
+                                    let title = run.display_title.clone().unwrap_or_default();
+                                    let status = run.status.clone().unwrap_or_default();
+                                    let number = run.run_number.unwrap_or(0);
+                                    view! {
+                                        <li>
+                                            <span class="run-status">{status}</span>
+                                            <strong>"#" {number}</strong> " " {title}
+                                        </li>
+                                    }
+                                }/>
+                            }.into_any()
+                        }
                     })}
                 </Suspense>
             </ul>

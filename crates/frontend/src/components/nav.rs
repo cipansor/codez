@@ -42,7 +42,7 @@ pub fn Nav() -> impl IntoView {
         <header class="app-header">
             <a class="brand" href="/">
                 <span class="logo">"</>"</span>
-                <span>"Codeza"</span>
+                <span>"Codez"</span>
             </a>
             <nav class="nav-links">
                 <a href="/" class:active=move || is_active("/")>"Dashboard"</a>
