@@ -144,17 +144,29 @@ pub fn normalize_string_eol(input: &str) -> String {
 
 /// `util.DiffSlice` — elements added to and removed from a slice, de-duplicated
 /// and preserving first-seen order.
-pub fn diff_slice<T: PartialEq + Clone>(old: &[T], new: &[T]) -> (Vec<T>, Vec<T>) {
+///
+/// Mirrors upstream's use of `container.Set` for membership and for tracking
+/// which values have already been emitted.
+pub fn diff_slice<T: PartialEq + Eq + std::hash::Hash + Clone>(
+    old: &[T],
+    new: &[T],
+) -> (Vec<T>, Vec<T>) {
+    use crate::container::Set;
+
+    let old_set = Set::of(old.iter().cloned());
+    let new_set = Set::of(new.iter().cloned());
+    let mut added_set: Set<T> = Set::new();
+    let mut removed_set: Set<T> = Set::new();
     let mut added = Vec::new();
     let mut removed = Vec::new();
 
     for v in new {
-        if !old.contains(v) && !added.contains(v) {
+        if !old_set.has(v) && added_set.add(v.clone()) {
             added.push(v.clone());
         }
     }
     for v in old {
-        if !new.contains(v) && !removed.contains(v) {
+        if !new_set.has(v) && removed_set.add(v.clone()) {
             removed.push(v.clone());
         }
     }
