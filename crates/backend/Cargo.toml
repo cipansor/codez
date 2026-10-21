@@ -16,3 +16,7 @@ base64.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 hex.workspace = true
+whoami.workspace = true
+aes.workspace = true
+cfb-mode.workspace = true
+reqwest.workspace = true

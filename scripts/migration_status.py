@@ -15,6 +15,14 @@ ROOT = Path(__file__).resolve().parent.parent
 # (upstream area, Rust target, upstream file glob)
 AREAS = [
     ("modules/util", "crates/backend/src/util", "*.go"),
+    ("modules/container", "crates/backend/src/container", "*.go"),
+    ("modules/consts", "crates/backend/src/consts", "*.go"),
+    ("modules/cachegroup", "crates/backend/src/cachegroup", "*.go"),
+    ("modules/regexplru", "crates/backend/src/regexplru", "*.go"),
+    ("modules/secret", "crates/backend/src/secret", "*.go"),
+    ("modules/tempdir", "crates/backend/src/tempdir", "*.go"),
+    ("modules/uri", "crates/backend/src/uri", "*.go"),
+    ("modules/user", "crates/backend/src/user", "*.go"),
     ("modules/structs", "crates/shared/src", "*.go"),
     ("modules/setting", "crates/backend/src/config", "*.go"),
     ("modules/markup", "crates/backend/src/markup", "*.go"),
@@ -34,10 +42,24 @@ def count_files(base: Path, pattern: str) -> int:
     return sum(1 for p in base.rglob(pattern) if p.is_file())
 
 
+def count_upstream(base: Path, pattern: str) -> int:
+    """Count upstream files, ignoring Go tests.
+
+    Ported tests live inline in the Rust module they cover, so a `_test.go`
+    file has no separate Rust counterpart; counting them would understate
+    progress.
+    """
+    if not base.is_dir():
+        return 0
+    return sum(
+        1 for p in base.rglob(pattern) if p.is_file() and not p.name.endswith("_test.go")
+    )
+
+
 def main() -> int:
     rows = []
     for src_rel, dst_rel, pattern in AREAS:
-        upstream = count_files(ROOT / src_rel, pattern)
+        upstream = count_upstream(ROOT / src_rel, pattern)
         ported = count_files(ROOT / dst_rel, "*.rs")
         rows.append((src_rel, dst_rel, upstream, ported))
 
