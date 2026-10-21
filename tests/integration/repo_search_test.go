@@ -1,0 +1,61 @@
+// Copyright 2017 The Gitea Authors. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+package integration
+
+import (
+	"net/http"
+	"testing"
+
+	repo_model "gitea.dev/models/repo"
+	code_indexer "gitea.dev/modules/indexer/code"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/test"
+	"gitea.dev/tests"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/stretchr/testify/assert"
+)
+
+func resultFilenames(doc *HTMLDoc) []string {
+	filenameSelections := doc.doc.Find(".repository.search").Find(".repo-search-result").Find(".header").Find("span.file")
+	result := make([]string, filenameSelections.Length())
+	filenameSelections.Each(func(i int, selection *goquery.Selection) {
+		result[i] = selection.Text()
+	})
+	return result
+}
+
+func TestSearchRepo(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	repo, err := repo_model.GetRepositoryByOwnerAndName(t.Context(), "user2", "repo1")
+	assert.NoError(t, err)
+
+	code_indexer.UpdateRepoIndexer(repo)
+
+	testSearch(t, "/user2/repo1/search?q=Description&page=1", []string{"README.md"})
+
+	defer test.MockVariableValue(&setting.Indexer.IncludePatterns, setting.IndexerGlobFromString("**.txt"))()
+	defer test.MockVariableValue(&setting.Indexer.ExcludePatterns, setting.IndexerGlobFromString("**/y/**"))()
+
+	repo, err = repo_model.GetRepositoryByOwnerAndName(t.Context(), "user2", "glob")
+	assert.NoError(t, err)
+
+	code_indexer.UpdateRepoIndexer(repo)
+
+	testSearch(t, "/user2/glob/search?q=loren&page=1", []string{"a.txt"})
+	testSearch(t, "/user2/glob/search?q=loren&page=1&t=match", []string{"a.txt"})
+	testSearch(t, "/user2/glob/search?q=file3&page=1", []string{"x/b.txt", "a.txt"})
+	testSearch(t, "/user2/glob/search?q=file3&page=1&t=match", []string{"x/b.txt", "a.txt"})
+	testSearch(t, "/user2/glob/search?q=file4&page=1&t=match", []string{"x/b.txt", "a.txt"})
+	testSearch(t, "/user2/glob/search?q=file5&page=1&t=match", []string{"x/b.txt", "a.txt"})
+}
+
+func testSearch(t *testing.T, url string, expected []string) {
+	t.Helper()
+	req := NewRequest(t, "GET", url)
+	resp := MakeRequest(t, req, http.StatusOK)
+	filenames := resultFilenames(NewHTMLParser(t, resp.Body))
+	assert.Equal(t, expected, filenames, "url=%s", url)
+}
