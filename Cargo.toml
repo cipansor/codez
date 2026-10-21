@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/backend", "crates/frontend", "crates/shared"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/cipansor/codez"
+
+[workspace.dependencies]
+regex = "1"
+url = "2"

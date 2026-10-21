@@ -1,0 +1,9 @@
+[package]
+name = "codez-frontend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Codez SPA frontend (Leptos), ported from Gitea web_src"
+
+[dependencies]

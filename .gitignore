@@ -120,3 +120,11 @@ prime/
 
 # A Makefile for custom make targets
 Makefile.local
+
+# Codez (Rust port)
+/target/
+__pycache__/
+*.py[cod]
+/test-results/
+/playwright-report/
+/blob-report/

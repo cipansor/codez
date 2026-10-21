@@ -1,0 +1,11 @@
+[package]
+name = "codez-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Codez HTTP backend (Axum), ported from Gitea"
+
+[dependencies]
+regex.workspace = true
+url.workspace = true
