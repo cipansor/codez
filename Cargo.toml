@@ -11,3 +11,11 @@ repository = "https://github.com/cipansor/codez"
 [workspace.dependencies]
 regex = "1"
 url = "2"
+# Crypto used by modules/util ports (keypair, AES-GCM, random helpers).
+rsa = { version = "0.9", features = ["sha2"] }
+sha2 = { version = "0.10", features = ["oid"] }
+aes-gcm = "0.10"
+base64 = "0.22"
+rand = "0.8"
+rand_chacha = "0.3"
+hex = "0.4"

@@ -106,11 +106,6 @@ pub fn to_lower_ascii(s: &str) -> String {
     String::from_utf8(bytes).unwrap_or_default()
 }
 
-/// `util.ParseYamlBool` — YAML 1.2 booleans.
-pub fn parse_yaml_bool(s: &str) -> bool {
-    s == "true" || s == "True" || s == "TRUE"
-}
-
 /// `util.NormalizeEOL` — converts CRLF and CR line endings to LF.
 pub fn normalize_eol(input: &[u8]) -> Vec<u8> {
     let Some(first_cr) = input.iter().position(|&c| c == b'\r') else {
