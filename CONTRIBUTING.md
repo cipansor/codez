@@ -1,6 +1,6 @@
-# Contributing to Codeza
+# Contributing to Codez
 
-Thanks for your interest in improving Codeza. This document covers the essentials:
+Thanks for your interest in improving Codez. This document covers the essentials:
 how to set up, the conventions we follow, and what CI checks your change must pass.
 
 ## Getting set up

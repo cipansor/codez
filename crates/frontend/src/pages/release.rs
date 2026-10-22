@@ -1,61 +1,63 @@
-use crate::api::{delete, get, get_or, local_resource, post, post_json, WRITE_ERROR};
-use crate::components::RepoNav;
+//! Release listing, detail and creation.
+
+use crate::api::{get, get_or, local_resource, post_json_resp, spawn, WRITE_ERROR};
+use crate::components::{FormError, Loading, RepoNav};
 use leptos::prelude::*;
-use leptos::task::spawn_local;
 use leptos_router::hooks::*;
 use shared::{CreateReleaseOption, Release};
 
+/// `/repos/:owner/:repo/releases` — every release, newest first.
 #[component]
 pub fn ReleaseList() -> impl IntoView {
     let params = use_params_map();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
-    let repo_name = move || params.with(|params| params.get("repo").unwrap_or_default());
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
+    let repo = move || params.with(|p| p.get("repo").unwrap_or_default());
 
     let releases = local_resource(
-        move || (owner(), repo_name()),
-        |(o, r)| async move {
-            get::<Vec<Release>>(&format!("/api/v1/repos/{}/{}/releases", o, r)).await
-        },
+        move || (owner(), repo()),
+        |(o, r)| async move { get::<Vec<Release>>(&format!("/api/v1/repos/{o}/{r}/releases")).await },
     );
 
     view! {
         <div class="release-list">
-        <RepoNav/>
-            <div class="flex-between">
-                <h3>"Releases for " {owner} "/" {repo_name}</h3>
-                <a href=format!("/repos/{}/{}/releases/new", owner(), repo_name()) class="btn">"Draft a new release"</a>
+            <RepoNav/>
+            <div class="page-header">
+                <h3>"Releases"</h3>
+                {move || view! {
+                    <a class="btn-primary" href=move || format!("/repos/{}/{}/releases/new", owner(), repo())>
+                        "New release"
+                    </a>
+                }}
             </div>
-            <ul>
-                <Suspense fallback=move || view! { <li>"Loading releases..."</li> }>
-                    {move || releases.get().map(|list| view! {
-                        <For each=move || list.clone() key=|r| r.id children=move |r| {
-                            let href = format!("/repos/{}/{}/releases/{}", owner(), repo_name(), r.id);
+            <ul class="item-list panel">
+                <Suspense fallback=|| view! { <Loading label="Loading releases…"/> }>
+                    {move || releases.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No releases yet."</li> }.into_any()
+                        } else {
+                            let o = owner();
+                            let r = repo();
                             view! {
-                                <li class="list-row">
-                                    <div class="flex-between">
-                                        <div>
-                                            <h4><a href=href>{r.name}</a></h4>
-                                            <span class="badge badge-success">{r.tag_name}</span>
-                                            {if r.draft { view! { <span class="badge badge-neutral ml-1">"Draft"</span> }.into_any() } else { view! { <span></span> }.into_any() }}
-                                            {if r.prerelease { view! { <span class="badge badge-warning ml-1">"Pre-release"</span> }.into_any() } else { view! { <span></span> }.into_any() }}
-                                        </div>
-                                        <div class="text-small text-muted">
-                                            {r.created_at}
-                                        </div>
-                                    </div>
-                                    <p>{r.body.unwrap_or_default()}</p>
-                                    <div class="assets mt-1">
-                                         <For each=move || r.assets.clone() key=|a| a.id children=move |a| {
-                                            view! {
-                                                <div class="text-small">
-                                                    <a href=a.download_url>"📦 " {a.name}</a> " (" {a.size} " bytes)"
-                                                </div>
-                                            }
-                                         }/>
-                                    </div>
-                                </li>
-                            }
-                        }/>
+                                <For each=move || list.clone() key=|rel| rel.id.unwrap_or(0) children=move |rel| {
+                                    let id = rel.id.unwrap_or(0);
+                                    let tag = rel.tag_name.clone().unwrap_or_default();
+                                    let name = rel.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| tag.clone());
+                                    let href = format!("/repos/{o}/{r}/releases/{id}");
+                                    let body = crate::components::first_line(&rel.body, 140);
+                                    let draft = rel.draft.unwrap_or(false);
+                                    let prerelease = rel.prerelease.unwrap_or(false);
+                                    view! {
+                                        <li>
+                                            <a href=href><strong>{name}</strong></a>
+                                            <span class="label">{tag}</span>
+                                            {draft.then(|| view! { <span class="label label-warning">" Draft"</span> })}
+                                            {prerelease.then(|| view! { <span class="label label-attention">" Pre-release"</span> })}
+                                            <p class="mb-0 text-muted">{body}</p>
+                                        </li>
+                                    }
+                                }/>
+                            }.into_any()
+                        }
                     })}
                 </Suspense>
             </ul>
@@ -63,175 +65,148 @@ pub fn ReleaseList() -> impl IntoView {
     }
 }
 
+/// `/repos/:owner/:repo/releases/:id` — one release and its assets.
 #[component]
 pub fn ReleaseDetail() -> impl IntoView {
     let params = use_params_map();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
-    let repo_name = move || params.with(|params| params.get("repo").unwrap_or_default());
-    let id = move || params.with(|params| params.get("id").unwrap_or_default());
-
-    // Trigger to refresh assets after upload
-    let (trigger, set_trigger) = signal(0);
-    let (action_error, set_action_error) = signal(Option::<String>::None);
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
+    let repo = move || params.with(|p| p.get("repo").unwrap_or_default());
+    let id = move || params.with(|p| p.get("id").unwrap_or_default());
 
     let release = local_resource(
-        move || (owner(), repo_name(), id(), trigger.get()),
-        |(o, r, i, _)| async move {
-            get_or::<Option<Release>>(&format!("/api/v1/repos/{}/{}/releases/{}", o, r, i), None)
-                .await
+        move || (owner(), repo(), id()),
+        |(o, r, i)| async move {
+            get_or::<Option<Release>>(&format!("/api/v1/repos/{o}/{r}/releases/{i}"), None).await
         },
     );
 
-    let on_upload_asset = move |_| {
-        let o = owner();
-        let r = repo_name();
-        let i = id();
-        spawn_local(async move {
-            if post(&format!("/api/v1/repos/{}/{}/releases/{}/assets", o, r, i)).await {
-                set_action_error.set(None);
-                set_trigger.update(|n| *n += 1);
-            } else {
-                set_action_error.set(Some(WRITE_ERROR.to_string()));
-            }
-        });
-    };
-
-    let on_delete = move |_| {
-        let o = owner();
-        let r = repo_name();
-        let i = id();
-        spawn_local(async move {
-            // Navigate away only once the release is actually gone; a rejected
-            // delete must not strand the user on a dead page.
-            if delete(&format!("/api/v1/repos/{}/{}/releases/{}", o, r, i)).await {
-                set_action_error.set(None);
-                let window = web_sys::window().unwrap();
-                let _ = window
-                    .location()
-                    .set_href(&format!("/repos/{}/{}/releases", o, r));
-            } else {
-                set_action_error.set(Some(WRITE_ERROR.to_string()));
-            }
-        });
-    };
-
     view! {
         <div class="release-detail">
-        <RepoNav/>
-            <Suspense fallback=move || view! { <p>"Loading..."</p> }>
-                {move || match release.get() {
-                    Some(Some(r)) => view! {
-                        <div>
-                            <div class="flex-between">
-                                <h2>{r.name}</h2>
-                                <div>
-                                    <button on:click=on_delete class="btn btn-danger-solid">"Delete Release"</button>
-                                </div>
-                            </div>
-                            <div class="meta">
-                                <span class="bold">{r.tag_name}</span>
-                                " | " {r.created_at} " | "
-                                {if r.draft { "Draft" } else { "Published" }}
-                            </div>
-                            <div class="body">
-                                {r.body.unwrap_or_default()}
-                            </div>
-                            <div class="assets-section">
-                                <h3>"Assets"</h3>
-                                <ul>
-                                    <For each=move || r.assets.clone() key=|a| a.id children=move |a| {
-                                        view! {
-                                            <li>
-                                                <a href=a.download_url>"📦 " {a.name}</a> " (" {a.size} " bytes)"
-                                            </li>
-                                        }
-                                    }/>
-                                </ul>
-                                <button on:click=on_upload_asset>"Upload New Asset (Mock)"</button>
-                                {move || action_error.get().map(|msg| view! {
-                                    <p class="form-error" role="alert">{msg}</p>
-                                })}
-                            </div>
+            <RepoNav/>
+            <Suspense fallback=|| view! { <p class="text-muted">"Loading release…"</p> }>
+                {move || release.get().flatten().map(|rel| {
+                    let tag = rel.tag_name.clone().unwrap_or_default();
+                    let name = rel.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| tag.clone());
+                    let body = rel.body.clone().unwrap_or_default();
+                    let published = rel.published_at.clone().or(rel.created_at.clone()).unwrap_or_default();
+                    let assets = rel.assets.clone().unwrap_or_default();
+                    view! {
+                        <div class="page-header">
+                            <h3>{name} <span class="label">{tag}</span></h3>
+                            <span class="text-small text-muted">{published}</span>
                         </div>
-                    }.into_any(),
-                    _ => view! { <p>"Release not found"</p> }.into_any()
-                }}
+                        <div class="release-body">{body}</div>
+                        <h4>"Assets"</h4>
+                        <ul class="item-list assets-section">
+                            {if assets.is_empty() {
+                                view! { <li class="text-muted">"No assets attached."</li> }.into_any()
+                            } else {
+                                assets.into_iter().map(|a| {
+                                    let name = a.name.clone().unwrap_or_default();
+                                    let size = a.size.unwrap_or(0);
+                                    let url = a.browser_download_url.clone().unwrap_or_default();
+                                    view! {
+                                        <li>
+                                            <a href=url><strong>{name}</strong></a>
+                                            <span class="text-small text-muted">" " {size} " bytes"</span>
+                                        </li>
+                                    }
+                                }).collect_view().into_any()
+                            }}
+                        </ul>
+                    }
+                })}
             </Suspense>
         </div>
     }
 }
 
+/// `/repos/:owner/:repo/releases/new` — publish a release.
 #[component]
 pub fn ReleaseCreate() -> impl IntoView {
     let params = use_params_map();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
-    let repo_name = move || params.with(|params| params.get("repo").unwrap_or_default());
+    let navigate = use_navigate();
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
+    let repo = move || params.with(|p| p.get("repo").unwrap_or_default());
 
-    let (tag, set_tag) = signal("".to_string());
-    let (name, set_name) = signal("".to_string());
-    let (body, set_body) = signal("".to_string());
+    let (tag_name, set_tag_name) = signal(String::new());
+    let (name, set_name) = signal(String::new());
+    let (body, set_body) = signal(String::new());
+    let (target, set_target) = signal(String::new());
     let (draft, set_draft) = signal(false);
     let (prerelease, set_prerelease) = signal(false);
-    let (form_error, set_form_error) = signal(Option::<String>::None);
+    let (error, set_error) = signal(Option::<String>::None);
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         let payload = CreateReleaseOption {
-            tag_name: tag.get(),
-            name: name.get(),
+            tag_name: tag_name.get(),
+            name: Some(name.get()),
             body: Some(body.get()),
-            draft: draft.get(),
-            prerelease: prerelease.get(),
+            target_commitish: Some(target.get()),
+            draft: Some(draft.get()),
+            prerelease: Some(prerelease.get()),
+            ..Default::default()
         };
         let o = owner();
-        let r = repo_name();
-
-        spawn_local(async move {
-            if post_json(&format!("/api/v1/repos/{}/{}/releases", o, r), &payload).await {
-                set_form_error.set(None);
-                let window = web_sys::window().unwrap();
-                let _ = window
-                    .location()
-                    .set_href(&format!("/repos/{}/{}/releases", o, r));
-            } else {
-                set_form_error.set(Some(WRITE_ERROR.to_string()));
+        let r = repo();
+        let navigate = navigate.clone();
+        spawn(async move {
+            match post_json_resp::<_, Release>(&format!("/api/v1/repos/{o}/{r}/releases"), &payload)
+                .await
+            {
+                Some(release) => {
+                    set_error.set(None);
+                    let id = release.id.unwrap_or(0);
+                    navigate(&format!("/repos/{o}/{r}/releases/{id}"), Default::default());
+                }
+                // Keep the typed fields so the user can fix them.
+                None => set_error.set(Some(WRITE_ERROR.to_string())),
             }
         });
     };
 
     view! {
         <div class="release-create">
-        <RepoNav/>
-            <h3>"Create a new release"</h3>
-            <form on:submit=on_submit>
-                <div class="mb-1">
-                    <label>"Tag version"</label>
-                    <input type="text" prop:value=tag on:input=move |ev| set_tag.set(event_target_value(&ev)) placeholder="v1.0.0" required class="w-100"/>
+            <RepoNav/>
+            <h3>"New release"</h3>
+            {move || error.get().map(|msg| view! { <FormError message=msg/> })}
+            <form class="panel" on:submit=on_submit>
+                <div class="form-group">
+                    <label>"Tag name"</label>
+                    <input type="text" prop:value=tag_name
+                        on:input=move |ev| set_tag_name.set(event_target_value(&ev)) />
                 </div>
-                <div class="mb-1">
+                <div class="form-group">
                     <label>"Release title"</label>
-                    <input type="text" prop:value=name on:input=move |ev| set_name.set(event_target_value(&ev)) placeholder="Release title" required class="w-100"/>
+                    <input type="text" prop:value=name
+                        on:input=move |ev| set_name.set(event_target_value(&ev)) />
                 </div>
-                <div class="mb-1">
+                <div class="form-group">
+                    <label>"Target branch"</label>
+                    <input type="text" prop:value=target
+                        on:input=move |ev| set_target.set(event_target_value(&ev)) />
+                </div>
+                <div class="form-group">
                     <label>"Description"</label>
-                    <textarea prop:value=body on:input=move |ev| set_body.set(event_target_value(&ev)) rows="10" class="w-100"></textarea>
+                    <textarea class="textarea-tall" prop:value=body
+                        on:input=move |ev| set_body.set(event_target_value(&ev))></textarea>
                 </div>
-                <div class="mb-1">
+                <div class="checkbox-group">
                     <label>
-                        <input type="checkbox" prop:checked=draft on:change=move |ev| set_draft.set(event_target_checked(&ev)) />
-                        " This is a draft"
+                        <input type="checkbox" prop:checked=draft
+                            on:change=move |ev| set_draft.set(event_target_checked(&ev)) />
+                        " Draft"
+                    </label>
+                    <label>
+                        <input type="checkbox" prop:checked=prerelease
+                            on:change=move |ev| set_prerelease.set(event_target_checked(&ev)) />
+                        " Pre-release"
                     </label>
                 </div>
-                <div class="mb-1">
-                    <label>
-                        <input type="checkbox" prop:checked=prerelease on:change=move |ev| set_prerelease.set(event_target_checked(&ev)) />
-                        " This is a pre-release"
-                    </label>
+                <div class="form-actions">
+                    <button class="btn-primary" type="submit">"Publish release"</button>
                 </div>
-                <button type="submit" class="btn btn-success-solid">"Publish Release"</button>
-                {move || form_error.get().map(|msg| view! {
-                    <p class="form-error" role="alert">{msg}</p>
-                })}
             </form>
         </div>
     }

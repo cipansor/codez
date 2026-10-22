@@ -1,5 +1,5 @@
 {
-  "name": "codeza",
+  "name": "codez",
   "version": "0.1.0",
   "private": true,
   "description": "Gitea-inspired code hosting platform built with Rust (Axum + Leptos).",

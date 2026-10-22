@@ -1,51 +1,52 @@
-use crate::api::{get, get_or, local_resource, post_json, WRITE_ERROR};
-use leptos::prelude::*;
-use leptos::task::spawn_local;
-use leptos_router::hooks::*;
-use shared::{CreatePackageOption, Package};
+//! Package registry listings and per-package detail.
 
+use crate::api::{get, get_or, local_resource};
+use crate::components::Loading;
+use leptos::prelude::*;
+use leptos_router::hooks::*;
+use shared::{Package, PackageFile};
+
+/// `/packages/:owner` — the packages an owner publishes.
 #[component]
 pub fn PackageList() -> impl IntoView {
     let params = use_params_map();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
 
-    let (show_upload, set_show_upload) = signal(false);
-    let (refresh, set_refresh) = signal(0);
-
-    let packages = local_resource(
-        move || (owner(), refresh.get()),
-        |(owner_name, _)| async move {
-            get::<Vec<Package>>(&format!("/api/v1/packages/{}", owner_name)).await
-        },
-    );
+    let packages = local_resource(owner, |name| async move {
+        get::<Vec<Package>>(&format!("/api/v1/packages/{name}")).await
+    });
 
     view! {
         <div class="package-list">
-            <div class="header flex-between">
+            <div class="page-header">
                 <h3>"Packages for " {owner}</h3>
-                <button on:click=move |_| set_show_upload.set(!show_upload.get())>
-                    {move || if show_upload.get() { "Cancel" } else { "Upload Package" }}
-                </button>
             </div>
-
-            {move || if show_upload.get() {
-                view! { <UploadPackageForm owner=owner() on_success=move || { set_show_upload.set(false); set_refresh.update(|n| *n += 1); } /> }.into_any()
-            } else {
-                view! { <span></span> }.into_any()
-            }}
-
-            <ul>
-                <Suspense fallback=move || view! { <li>"Loading..."</li> }>
-                    {move || packages.get().map(|list| view! {
-                        <For each=move || list.clone() key=|p| p.id children=move |p| {
-                            let href = format!("/packages/{}/{}/{}/{}", owner(), p.package_type, p.name, p.version);
+            <p class="text-muted">
+                "Packages published to this instance, one entry per version. "
+                "New versions arrive through each ecosystem's own client."
+            </p>
+            <ul class="item-list panel">
+                <Suspense fallback=|| view! { <Loading label="Loading packages…"/> }>
+                    {move || packages.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No packages published yet."</li> }.into_any()
+                        } else {
                             view! {
-                                <li class="boxed">
-                                    <a href=href class="bold">{p.name}</a>
-                                    <span class="ml-2 text-muted">"v" {p.version} " (" {p.package_type} ")"</span>
-                                </li>
-                            }
-                        }/>
+                                <For each=move || list.clone() key=|p| p.id.unwrap_or(0) children=move |p| {
+                                    let name = p.name.clone().unwrap_or_default();
+                                    let kind = p.type_.clone().unwrap_or_default();
+                                    let version = p.version.clone().unwrap_or_default();
+                                    let owner = p.owner.as_ref().and_then(|o| o.login.clone()).unwrap_or_default();
+                                    let href = format!("/packages/{owner}/{kind}/{name}/{version}");
+                                    view! {
+                                        <li>
+                                            <a href=href><strong>{name}</strong></a>
+                                            <span class="text-muted">" v" {version} " (" {kind} ")"</span>
+                                        </li>
+                                    }
+                                }/>
+                            }.into_any()
+                        }
                     })}
                 </Suspense>
             </ul>
@@ -53,107 +54,73 @@ pub fn PackageList() -> impl IntoView {
     }
 }
 
-#[component]
-fn UploadPackageForm<F>(owner: String, on_success: F) -> impl IntoView
-where
-    F: Fn() + Clone + 'static,
-{
-    let (name, set_name) = signal("".to_string());
-    let (version, set_version) = signal("".to_string());
-    let (pkg_type, set_pkg_type) = signal("npm".to_string());
-    let (form_error, set_form_error) = signal(Option::<String>::None);
-
-    let on_submit = move |ev: leptos::ev::SubmitEvent| {
-        ev.prevent_default();
-        let payload = CreatePackageOption {
-            name: name.get(),
-            version: version.get(),
-            package_type: pkg_type.get(),
-        };
-        let o = owner.clone();
-        let on_success_clone = on_success.clone();
-        spawn_local(async move {
-            if post_json(&format!("/api/v1/packages/{}", o), &payload).await {
-                set_form_error.set(None);
-                on_success_clone();
-            } else {
-                set_form_error.set(Some(WRITE_ERROR.to_string()));
-            }
-        });
-    };
-
-    view! {
-        <form on:submit=on_submit class="panel">
-            <div>
-                <input type="text" placeholder="Package Name" prop:value=name on:input=move |ev| set_name.set(event_target_value(&ev)) required />
-            </div>
-            <div>
-                <input type="text" placeholder="Version (e.g. 1.0.0)" prop:value=version on:input=move |ev| set_version.set(event_target_value(&ev)) required />
-            </div>
-            <div>
-                <select on:change=move |ev| set_pkg_type.set(event_target_value(&ev))>
-                    <option value="npm">"npm"</option>
-                    <option value="maven">"Maven"</option>
-                    <option value="cargo">"Cargo"</option>
-                    <option value="docker">"Docker"</option>
-                    <option value="generic">"Generic"</option>
-                </select>
-            </div>
-            <button type="submit">"Upload"</button>
-            {move || form_error.get().map(|msg| view! {
-                <p class="form-error" role="alert">{msg}</p>
-            })}
-        </form>
-    }
-}
-
+/// `/packages/:owner/:type/:name/:version` — one package and its files.
 #[component]
 pub fn PackageDetail() -> impl IntoView {
     let params = use_params_map();
-    let owner = move || params.with(|params| params.get("owner").unwrap_or_default());
-    let name = move || params.with(|params| params.get("name").unwrap_or_default());
-    let version = move || params.with(|params| params.get("version").unwrap_or_default());
-    let pkg_type = move || params.with(|params| params.get("type").unwrap_or_default());
+    let owner = move || params.with(|p| p.get("owner").unwrap_or_default());
+    let kind = move || params.with(|p| p.get("type").unwrap_or_default());
+    let name = move || params.with(|p| p.get("name").unwrap_or_default());
+    let version = move || params.with(|p| p.get("version").unwrap_or_default());
 
     let package = local_resource(
-        move || (owner(), pkg_type(), name(), version()),
+        move || (owner(), kind(), name(), version()),
         |(o, t, n, v)| async move {
-            get_or::<Option<Package>>(&format!("/api/v1/packages/{}/{}/{}/{}", o, t, n, v), None)
-                .await
+            get_or::<Option<Package>>(&format!("/api/v1/packages/{o}/{t}/{n}/{v}"), None).await
+        },
+    );
+
+    let files = local_resource(
+        move || (owner(), kind(), name(), version()),
+        |(o, t, n, v)| async move {
+            get::<Vec<PackageFile>>(&format!("/api/v1/packages/{o}/{t}/{n}/{v}/files")).await
         },
     );
 
     view! {
         <div class="package-detail">
-            <Suspense fallback=move || view! { <h3>"Loading..."</h3> }>
-                {move || match package.get() {
-                    Some(Some(p)) => {
-                        let name = p.name.clone();
-                        let owner = p.owner.clone();
-                        let version = p.version.clone();
-                        let pkg_type = p.package_type.clone();
-                        let install_cmd = match pkg_type.as_str() {
-                                    "npm" => format!("npm install {}@{}", name, version),
-                                    "cargo" => format!("cargo add {}@{}", name, version),
-                                    _ => "See documentation".to_string()
-                        };
+            <div class="page-header">
+                <h3>{name} " v" {version} <span class="text-muted text-lg">{kind}</span></h3>
+            </div>
 
-                        view! {
-                            <h3>"Package: " {name}</h3>
-                            <div class="meta">
-                                <p><strong>"Owner:"</strong> " " {owner}</p>
-                                <p><strong>"Version:"</strong> " " {version}</p>
-                                <p><strong>"Type:"</strong> " " {pkg_type}</p>
-                            </div>
-                            <div class="install-instructions">
-                                <h4>"Installation"</h4>
-                                <pre>{install_cmd}</pre>
-                            </div>
-                        }.into_any()
-                    },
-                    _ => view! { <h3>"Package Not Found"</h3> }.into_any()
-                }}
+            <Suspense fallback=|| view! { <p class="text-muted">"Loading package…"</p> }>
+                {move || package.get().flatten().map(|p| {
+                    let created = p.created_at.clone().unwrap_or_default();
+                    let url = p.html_url.clone().unwrap_or_default();
+                    view! {
+                        <dl class="meta">
+                            <dt>"Published"</dt><dd>{created}</dd>
+                            <dt>"Page"</dt><dd><a href=url.clone()>{url.clone()}</a></dd>
+                        </dl>
+                    }
+                })}
             </Suspense>
+
+            <h4>"Files"</h4>
+            <ul class="item-list panel">
+                <Suspense fallback=|| view! { <Loading label="Loading files…"/> }>
+                    {move || files.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No files recorded."</li> }.into_any()
+                        } else {
+                            view! {
+                                <For each=move || list.clone() key=|f| f.id.unwrap_or(0) children=move |f| {
+                                    let name = f.name.clone().unwrap_or_default();
+                                    let size = f.size.unwrap_or(0);
+                                    let sha256 = f.sha256.clone().unwrap_or_default();
+                                    view! {
+                                        <li>
+                                            <strong>{name}</strong>
+                                            <span class="text-small text-muted">" " {size} " bytes"</span>
+                                            <div class="text-small text-muted"><code>{sha256}</code></div>
+                                        </li>
+                                    }
+                                }/>
+                            }.into_any()
+                        }
+                    })}
+                </Suspense>
+            </ul>
         </div>
     }
 }

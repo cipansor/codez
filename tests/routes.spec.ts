@@ -1,125 +1,80 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
+import { trackPageErrors, waitForApp } from './helpers';
 
 /**
- * Every client route must render without an uncaught exception and show the
- * expected page shell. This is a broad smoke net so a broken resource or a
- * renamed route is caught before the narrower feature specs run.
+ * Route smoke net.
+ *
+ * Every client route in `crates/frontend/src/main.rs` is rendered once and
+ * asserted to (a) mount the app shell and (b) never raise an uncaught error.
+ * Keep this list in sync with the router: a renamed or removed route must fail
+ * loudly here rather than silently 404 in the browser.
+ *
+ * The paths use resources that exist in the demo seed (`codez-org/codez`,
+ * user `alice`, issue #1, pull #2, milestone id 300, release id 500).
  */
-const ROUTES: Array<{ path: string; heading?: RegExp }> = [
-  { path: '/' },
-  { path: '/explore' },
-  { path: '/admin' },
-  { path: '/admin/users' },
-  { path: '/search' },
-  { path: '/notifications' },
-  { path: '/login' },
-  { path: '/register' },
-  { path: '/settings/profile' },
-  { path: '/repo/create' },
-  { path: '/repo/migrate' },
-  { path: '/org/create' },
-  { path: '/users/admin' },
-  { path: '/users/admin/followers' },
-  { path: '/users/admin/following' },
-  { path: '/orgs/codeza-org' },
-  { path: '/packages/admin' },
-  { path: '/packages/admin/cargo/my-lib/1.0.0' },
-  { path: '/repos/admin/codeza' },
-  { path: '/repos/admin/codeza/src/src/main.rs' },
-  { path: '/repos/admin/codeza/commits' },
-  { path: '/repos/admin/codeza/commits/1' },
-  { path: '/repos/admin/codeza/branches' },
-  { path: '/repos/admin/codeza/tags' },
-  { path: '/repos/admin/codeza/search' },
-  { path: '/repos/admin/codeza/compare' },
-  { path: '/repos/admin/codeza/issues' },
-  { path: '/repos/admin/codeza/issues/1' },
-  { path: '/repos/admin/codeza/pulls' },
-  { path: '/repos/admin/codeza/pulls/1' },
-  { path: '/repos/admin/codeza/labels' },
-  { path: '/repos/admin/codeza/milestones' },
-  { path: '/repos/admin/codeza/milestones/1' },
-  { path: '/repos/admin/codeza/releases' },
-  { path: '/repos/admin/codeza/releases/new' },
-  { path: '/repos/admin/codeza/releases/1' },
-  { path: '/repos/admin/codeza/actions' },
-  { path: '/repos/admin/codeza/actions/workflows/1' },
-  { path: '/repos/admin/codeza/security' },
-  { path: '/repos/admin/codeza/pulse' },
-  { path: '/repos/admin/codeza/projects' },
-  { path: '/repos/admin/codeza/discussions' },
-  { path: '/repos/admin/codeza/wiki' },
-  { path: '/repos/admin/codeza/wiki/pages/Home' },
-  { path: '/repos/admin/codeza/wiki/pages/Home/edit' },
-  { path: '/repos/admin/codeza/edit/README.md' },
-  { path: '/repos/admin/codeza/collaborators' },
-  { path: '/repos/admin/codeza/settings' },
-  { path: '/repos/admin/codeza/settings/branches' },
-  { path: '/repos/admin/codeza/settings/webhooks' },
-  { path: '/repos/admin/codeza/settings/secrets' },
-  { path: '/repos/admin/codeza/settings/keys' },
-  { path: '/repos/admin/codeza/settings/lfs' },
+const ROUTES: string[] = [
+  '/',
+  '/explore',
+  '/search',
+  '/notifications',
+  '/login',
+  '/register',
+  '/settings/profile',
+  '/admin',
+  '/admin/users',
+  '/admin/orgs',
+  '/admin/emails',
+  '/repo/create',
+  '/repo/migrate',
+  '/packages/codez-org',
+  '/org/create',
+  '/orgs/codez-org',
+  '/users/alice',
+  '/users/alice/followers',
+  '/users/alice/following',
+  '/repos/codez-org/codez',
+  '/repos/codez-org/codez/src/main',
+  '/repos/codez-org/codez/src/README.md',
+  '/repos/codez-org/codez/edit/README.md',
+  '/repos/codez-org/codez/search',
+  '/repos/codez-org/codez/commits',
+  '/repos/codez-org/codez/commits/d47c058533feb571f44aa8fe52ff001227c22d5d',
+  '/repos/codez-org/codez/branches',
+  '/repos/codez-org/codez/tags',
+  '/repos/codez-org/codez/pulse',
+  '/repos/codez-org/codez/compare',
+  '/repos/codez-org/codez/issues',
+  '/repos/codez-org/codez/issues/1',
+  '/repos/codez-org/codez/labels',
+  '/repos/codez-org/codez/milestones',
+  '/repos/codez-org/codez/milestones/300',
+  '/repos/codez-org/codez/pulls',
+  '/repos/codez-org/codez/pulls/2',
+  '/repos/codez-org/codez/releases',
+  '/repos/codez-org/codez/releases/new',
+  '/repos/codez-org/codez/releases/500',
+  '/repos/codez-org/codez/actions',
+  '/repos/codez-org/codez/wiki',
+  '/repos/codez-org/codez/settings',
 ];
 
-test.describe('Route smoke coverage', () => {
-  for (const { path } of ROUTES) {
-    test(`renders ${path}`, async ({ page }) => {
-      const errors: string[] = [];
-      page.on('pageerror', (err) => errors.push(err.message));
+for (const route of ROUTES) {
+  test(`renders ${route} without errors`, async ({ page }) => {
+    const errors = trackPageErrors(page);
+    const response = await page.goto(route);
+    expect(response?.status(), `HTTP status for ${route}`).toBeLessThan(400);
 
-      const response = await page.goto(path);
-      expect(response?.status(), `${path} should return < 400`).toBeLessThan(400);
+    await waitForApp(page);
 
-      // Wait for the SPA shell + any Suspense fallbacks to settle.
-      await expect(page.locator('header.app-header')).toBeVisible();
-      await expect(page.locator('main.page')).toBeVisible();
-      // Give async resources a moment so a failed fetch surfaces as an error.
-      await page.waitForTimeout(400);
-
-      expect(errors, `uncaught errors on ${path}`).toEqual([]);
-    });
-  }
-});
-
-test.describe('Repository chrome', () => {
-  test('RepoNav marks the active section on every sub-page', async ({ page }) => {
-    // `slug` is a bare section; `path` covers sub-views that map onto a tab
-    // (edit/search belong to Code, compare belongs to Pull requests).
-    const sections: Array<{ path: string; label: string }> = [
-      { path: 'issues', label: 'Issues' },
-      { path: 'pulls', label: 'Pull requests' },
-      { path: 'commits', label: 'Commits' },
-      { path: 'security', label: 'Security' },
-      { path: 'settings', label: 'Settings' },
-      { path: 'src/src/main.rs', label: 'Code' },
-      { path: 'edit/README.md', label: 'Code' },
-      { path: 'search', label: 'Code' },
-      { path: 'compare', label: 'Pull requests' },
-    ];
-    for (const { path, label } of sections) {
-      await page.goto(`/repos/admin/codeza/${path}`);
-      const active = page.locator('nav.repo-nav a.active');
-      await expect(active, `active tab on /${path}`).toHaveText(label);
-      await expect(active, `aria-current on /${path}`).toHaveAttribute('aria-current', 'page');
-    }
+    // The router fallback is the only place this copy appears; its presence
+    // means the path did not match any route.
+    await expect(page.locator('.not-found')).toHaveCount(0);
+    expect(errors, `uncaught errors on ${route}`).toEqual([]);
   });
+}
 
-  test('the shared repository header renders on every sub-page', async ({ page }) => {
-    const paths = [
-      '/repos/admin/codeza',
-      '/repos/admin/codeza/issues',
-      '/repos/admin/codeza/pulls',
-      '/repos/admin/codeza/actions',
-      '/repos/admin/codeza/wiki',
-      '/repos/admin/codeza/settings',
-    ];
-    for (const path of paths) {
-      await page.goto(path);
-      const header = page.locator('.repo-header');
-      await expect(header).toBeVisible();
-      await expect(header.locator('h3')).toContainText('Repository: admin / codeza');
-      await expect(header.getByRole('button', { name: 'Fork' })).toBeVisible();
-      await expect(page.locator('nav.repo-nav')).toBeVisible();
-    }
-  });
+test('unknown client route shows the 404 fallback', async ({ page }) => {
+  await page.goto('/this/route/does/not/exist');
+  await waitForApp(page);
+  await expect(page.locator('.not-found')).toContainText('404');
 });

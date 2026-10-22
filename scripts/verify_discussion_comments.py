@@ -19,8 +19,8 @@ def wait_for_server():
 
 def test_discussion_comments():
     print("Verifying Discussion Comments Endpoints...")
-    repo_owner = "admin"
-    repo_name = "codeza"
+    repo_owner = "codez-org"
+    repo_name = "codez"
 
     try:
         # 1. Create Discussion

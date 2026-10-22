@@ -1,10 +1,10 @@
-"""Audit every Codeza route for horizontal overflow at mobile/tablet/desktop widths.
+"""Audit every Codez route for horizontal overflow at mobile/tablet/desktop widths.
 
 Usage:
     python scripts/audit_responsive.py
 
 Requires a running backend serving the built frontend at
-``http://127.0.0.1:3000`` (override with ``CODEZA_BASE_URL``) and the Playwright
+``http://127.0.0.1:3000`` (override with ``CODEZ_BASE_URL``) and the Playwright
 browsers installed. Exits non-zero if any route overflows the viewport.
 """
 
@@ -17,7 +17,7 @@ from playwright.sync_api import sync_playwright
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from capture_screenshots import ROUTES  # noqa: E402
 
-BASE_URL = os.environ.get("CODEZA_BASE_URL", "http://127.0.0.1:3000")
+BASE_URL = os.environ.get("CODEZ_BASE_URL", "http://127.0.0.1:3000")
 WIDTHS = (390, 768, 1440)
 
 # Report at most this many offending elements per route.

@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Codeza — design system
+   Codez — design system
    A small, dependency-free stylesheet. Organised as:
    1. Tokens   2. Reset/base   3. Layout   4. Components   5. Utilities
    ========================================================================== */
@@ -451,6 +451,7 @@ tbody tr:hover { background: var(--color-canvas-subtle); }
 .label-success { color: var(--color-success); background: var(--color-success-subtle); }
 .label-attention { color: var(--color-attention); background: var(--color-attention-subtle); }
 .label-danger { color: var(--color-danger); background: var(--color-danger-subtle); }
+.label-warning { color: var(--color-attention); background: var(--color-attention-subtle); }
 .label-accent { color: var(--color-accent); background: var(--color-accent-subtle); }
 .label-done { color: var(--color-done); background: var(--color-done-subtle); }
 
@@ -526,7 +527,9 @@ tbody tr:hover { background: var(--color-canvas-subtle); }
   margin-bottom: 16px;
   border-bottom: 1px solid var(--color-border);
 }
-.repo-stats { display: flex; gap: 16px; font-size: 13px; color: var(--color-fg-muted); }
+.repo-stats { display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: var(--color-fg-muted); }
+.repo-topics { display: flex; flex-direction: column; gap: 8px; }
+.install-instructions input { width: 100%; }
 .repo-actions { display: flex; gap: 8px; }
 
 .pulse-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
@@ -544,6 +547,7 @@ tbody tr:hover { background: var(--color-canvas-subtle); }
 }
 .language-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--color-fg-muted); }
 .language-legend-item { white-space: nowrap; }
+.language-bar-wrap { display: block; }
 
 /* 5. Feature sections ------------------------------------------------------ */
 /* Shared structure for the page-level containers rendered by each feature
@@ -608,6 +612,8 @@ tbody tr:hover { background: var(--color-canvas-subtle); }
 .issue-sidebar,
 .pr-actions { display: flex; flex-direction: column; gap: 8px; }
 .issue-main { flex: 1; min-width: 0; }
+.issue-row { display: flex; align-items: flex-start; gap: 8px; }
+.issue-icon { flex-shrink: 0; }
 .assignees-list { margin-bottom: 8px; }
 .add-assignee,
 .add-label { display: flex; align-items: center; gap: 8px; }
@@ -870,6 +876,8 @@ tbody tr:hover { background: var(--color-canvas-subtle); }
 .assets { margin-top: 8px; }
 .assets ul { list-style: none; margin: 0; padding: 0; }
 .body { margin-top: 8px; }
+.release-body { margin-top: 8px; }
+.not-found { padding: 48px 16px; text-align: center; color: var(--color-fg-muted); }
 .box { padding: 12px; background: var(--color-canvas-subtle); border: 1px solid var(--color-border); border-radius: var(--radius); }
 .code-search-link { margin: 8px 0; }
 .active-authors { margin-top: 8px; }
@@ -903,6 +911,7 @@ tbody tr:hover { background: var(--color-canvas-subtle); }
 .flex-between { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .flex-center { display: flex; align-items: center; gap: 12px; }
 .flex-wrap { flex-wrap: wrap; }
+.run-actions { display: inline-flex; align-items: center; gap: 8px; }
 .gap-sm { gap: 8px; }
 .gap-md { gap: 16px; }
 .mt-0 { margin-top: 0; }

@@ -1,109 +1,195 @@
-use crate::api::{delete, get, get_opt, local_resource, WRITE_ERROR};
-use leptos::prelude::*;
-use leptos::task::spawn_local;
-use shared::{AdminStats, SystemNotice, User};
+//! Administrative dashboard, user management and instance notices.
 
+use crate::api::{get, local_resource};
+use crate::components::Loading;
+use leptos::prelude::*;
+use shared::{Cron, Organization, User};
+
+/// The `GET /admin/stats` document (`AdminStats`).
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct AdminStats {
+    #[serde(default)]
+    pub issue_count: i64,
+    #[serde(default)]
+    pub organization_count: i64,
+    #[serde(default)]
+    pub pull_request_count: i64,
+    #[serde(default)]
+    pub repo_count: i64,
+    #[serde(default)]
+    pub user_count: i64,
+}
+
+/// `/admin` — instance statistics and scheduled tasks.
 #[component]
 pub fn AdminDashboard() -> impl IntoView {
     let stats = local_resource(
         || (),
-        |_| async move { get_opt::<AdminStats>("/api/v1/admin/stats").await },
+        |_| async move { get::<AdminStats>("/api/v1/admin/stats").await },
+    );
+    let cron = local_resource(
+        || (),
+        |_| async move { get::<Vec<Cron>>("/api/v1/admin/cron").await },
     );
 
     view! {
         <div class="admin-dashboard">
-            <h2>"Admin Dashboard"</h2>
-            <p><a href="/admin/users">"Manage Users"</a></p>
-            <Suspense fallback=move || view! { <p>"Loading..."</p> }>
-                {move || match stats.get() {
-                    Some(Some(s)) => view! {
-                        <div>
-                            <p>"Users: " {s.users}</p>
-                            <p>"Repos: " {s.repos}</p>
-                            <p>"Orgs: " {s.orgs}</p>
-                            <p>"Issues: " {s.issues}</p>
-                        </div>
-                    }.into_any(),
-                    _ => view! { <p>"No stats"</p> }.into_any()
-                }}
+            <div class="page-header">
+                <h2>"Administration"</h2>
+            </div>
+
+            <Suspense fallback=|| view! { <p class="text-muted">"Loading statistics…"</p> }>
+                {move || stats.get().map(|s| view! {
+                    <div class="stat-grid">
+                        <div class="stat-card"><span class="stat-value">{s.user_count}</span><span>"Users"</span></div>
+                        <div class="stat-card"><span class="stat-value">{s.repo_count}</span><span>"Repositories"</span></div>
+                        <div class="stat-card"><span class="stat-value">{s.organization_count}</span><span>"Organizations"</span></div>
+                        <div class="stat-card"><span class="stat-value">{s.issue_count}</span><span>"Issues"</span></div>
+                        <div class="stat-card"><span class="stat-value">{s.pull_request_count}</span><span>"Pull requests"</span></div>
+                    </div>
+                })}
             </Suspense>
-            <AdminNotices/>
+
+            <h3 class="mt-3">"Scheduled tasks"</h3>
+            <ul class="item-list panel">
+                <Suspense fallback=|| view! { <Loading label="Loading…"/> }>
+                    {move || cron.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No scheduled tasks."</li> }.into_any()
+                        } else {
+                            view! {
+                                <For each=move || list.clone() key=|c| c.name.clone().unwrap_or_default() children=move |c| {
+                                    let name = c.name.clone().unwrap_or_default();
+                                    let schedule = c.schedule.clone().unwrap_or_default();
+                                    view! { <li><strong>{name}</strong> <code>{schedule}</code></li> }
+                                }/>
+                            }.into_any()
+                        }
+                    })}
+                </Suspense>
+            </ul>
         </div>
     }
 }
 
+/// `/admin/users` — every account on the instance.
 #[component]
 pub fn AdminUsers() -> impl IntoView {
-    let (refresh, set_refresh) = signal(0);
-    let (action_error, set_action_error) = signal(Option::<String>::None);
-
     let users = local_resource(
-        move || refresh.get(),
+        || (),
         |_| async move { get::<Vec<User>>("/api/v1/admin/users").await },
     );
 
-    let on_delete = move |username: String| {
-        spawn_local(async move {
-            if delete(&format!("/api/v1/admin/users/{}", username)).await {
-                set_action_error.set(None);
-                set_refresh.update(|n| *n += 1);
-            } else {
-                set_action_error.set(Some(WRITE_ERROR.to_string()));
-            }
-        });
-    };
-
     view! {
-        <div class="admin-users">
-            <h3>"User Management"</h3>
-            {move || action_error.get().map(|msg| view! {
-                <p class="form-error" role="alert">{msg}</p>
-            })}
-            <table>
-                <thead><tr><th>"ID"</th><th>"Username"</th><th>"Email"</th><th>"Actions"</th></tr></thead>
-                <tbody>
-                    <Suspense fallback=move || view! { <tr><td colspan="4">"Loading..."</td></tr> }>
-                        {move || users.get().map(|list| view! {
-                            <For each=move || list.clone() key=|u| u.id children=move |u| {
-                                let uname = u.username.clone();
-                                view! {
-                                    <tr>
-                                        <td>{u.id}</td>
-                                        <td>{u.username}</td>
-                                        <td>{u.email}</td>
-                                        <td>
-                                            <button on:click=move |_| {
-                                                let u = uname.clone();
-                                                on_delete(u);
-                                            }>"Delete"</button>
-                                        </td>
-                                    </tr>
-                                }
-                            }/>
-                        })}
-                    </Suspense>
-                </tbody>
-            </table>
+        <div class="admin-users panel">
+            <div class="page-header">
+                <h2>"Users"</h2>
+            </div>
+            <ul class="item-list">
+                <Suspense fallback=|| view! { <Loading label="Loading users…"/> }>
+                    {move || users.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No users."</li> }.into_any()
+                        } else {
+                            view! {
+                                <For each=move || list.clone() key=|u| u.id.unwrap_or(0) children=move |u| {
+                                    let login = u.login.clone().unwrap_or_default();
+                                    let href = format!("/users/{login}");
+                                    let email = u.email.clone().unwrap_or_default();
+                                    let admin = u.is_admin.unwrap_or(false);
+                                    view! {
+                                        <li class="flex-between">
+                                            <span>
+                                                <a href=href><strong>{login}</strong></a>
+                                                <span class="text-small text-muted">" " {email}</span>
+                                            </span>
+                                            {admin.then(|| view! { <span class="label label-accent">"Admin"</span> })}
+                                        </li>
+                                    }
+                                }/>
+                            }.into_any()
+                        }
+                    })}
+                </Suspense>
+            </ul>
         </div>
     }
 }
 
+/// `/admin/orgs` — every organization on the instance.
 #[component]
-pub fn AdminNotices() -> impl IntoView {
-    let notices = local_resource(
+pub fn AdminOrgs() -> impl IntoView {
+    let orgs = local_resource(
         || (),
-        |_| async move { get::<Vec<SystemNotice>>("/api/v1/admin/notices").await },
+        |_| async move { get::<Vec<Organization>>("/api/v1/admin/orgs").await },
     );
 
     view! {
-        <div class="admin-notices">
-            <h3>"System Notices"</h3>
-            <ul>
-                <Suspense fallback=move || view! { <li>"Loading..."</li> }>
-                    {move || notices.get().map(|list| view! {
-                        <For each=move || list.clone() key=|n| n.id children=move |n| {
-                            view! { <li>[{n.type_.clone()}] " " {n.description.clone()}</li> }
-                        }/>
+        <div class="admin-users panel">
+            <div class="page-header">
+                <h2>"Organizations"</h2>
+            </div>
+            <ul class="item-list">
+                <Suspense fallback=|| view! { <Loading label="Loading organizations…"/> }>
+                    {move || orgs.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No organizations."</li> }.into_any()
+                        } else {
+                            view! {
+                                <For each=move || list.clone() key=|o| o.id.unwrap_or(0) children=move |o| {
+                                    let name = o.name.clone().unwrap_or_default();
+                                    let href = format!("/orgs/{name}");
+                                    let description = o.description.clone().unwrap_or_default();
+                                    view! {
+                                        <li>
+                                            <a href=href><strong>{name}</strong></a>
+                                            <p class="mb-0 text-muted">{description}</p>
+                                        </li>
+                                    }
+                                }/>
+                            }.into_any()
+                        }
+                    })}
+                </Suspense>
+            </ul>
+        </div>
+    }
+}
+
+/// `/admin/emails` — every email address on the instance.
+#[component]
+pub fn AdminEmails() -> impl IntoView {
+    let emails = local_resource(
+        || (),
+        |_| async move { get::<Vec<shared::Email>>("/api/v1/admin/emails").await },
+    );
+
+    view! {
+        <div class="admin-users panel">
+            <div class="page-header">
+                <h2>"Emails"</h2>
+            </div>
+            <ul class="item-list">
+                <Suspense fallback=|| view! { <Loading label="Loading emails…"/> }>
+                    {move || emails.get().map(|list| {
+                        if list.is_empty() {
+                            view! { <li class="text-muted">"No email addresses."</li> }.into_any()
+                        } else {
+                            view! {
+                                <For each=move || list.clone() key=|e| e.email.clone().unwrap_or_default() children=move |e| {
+                                    let address = e.email.clone().unwrap_or_default();
+                                    let user = e.username.clone().unwrap_or_default();
+                                    let primary = e.primary.unwrap_or(false);
+                                    view! {
+                                        <li>
+                                            <span>{address}</span>
+                                            <span class="text-small text-muted">" " {user}</span>
+                                            {primary.then(|| view! { <span class="label label-accent">" Primary"</span> })}
+                                        </li>
+                                    }
+                                }/>
+                            }.into_any()
+                        }
                     })}
                 </Suspense>
             </ul>

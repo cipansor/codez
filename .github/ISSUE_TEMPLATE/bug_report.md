@@ -25,7 +25,7 @@ What actually happened. Include any error text, console output, or backend log l
 
 ## Environment
 
-- Codeza commit / branch:
+- Codez commit / branch:
 - Browser (if frontend):
 - Run mode: `cargo run -p backend` / `trunk serve` / other
 - `DATABASE_URL` set: yes / no

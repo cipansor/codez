@@ -1,10 +1,11 @@
-"""Capture full-page screenshots of every Codeza UI route.
+"""Capture full-page screenshots of every Codez UI route.
 
 Usage:
     python scripts/capture_screenshots.py [output_dir]
 
-Requires a running backend serving the built frontend at
-``http://127.0.0.1:3000`` (see README) and the Playwright browsers installed.
+Requires a running backend serving the built frontend (see README) and the
+Playwright browsers installed. The routes and the seed resources they point at
+mirror ``tests/routes.spec.ts``; keep the two lists in sync.
 """
 
 import os
@@ -12,56 +13,52 @@ import sys
 
 from playwright.sync_api import sync_playwright
 
-BASE_URL = os.environ.get("CODEZA_BASE_URL", "http://127.0.0.1:3000")
+BASE_URL = os.environ.get("CODEZ_BASE_URL", "http://127.0.0.1:3000")
+
+REPO = "/repos/codez-org/codez"
 
 ROUTES = [
     ("01_dashboard", "/"),
     ("02_explore", "/explore"),
-    ("03_repo_detail", "/repos/admin/codeza"),
-    ("04_repo_code", "/repos/admin/codeza/src/src/main.rs"),
-    ("05_commits", "/repos/admin/codeza/commits"),
-    ("06_branches", "/repos/admin/codeza/branches"),
-    ("07_tags", "/repos/admin/codeza/tags"),
-    ("08_issues", "/repos/admin/codeza/issues"),
-    ("09_issue_detail", "/repos/admin/codeza/issues/1"),
-    ("10_pulls", "/repos/admin/codeza/pulls"),
-    ("11_pull_detail", "/repos/admin/codeza/pulls/1"),
-    ("12_labels", "/repos/admin/codeza/labels"),
-    ("13_milestones", "/repos/admin/codeza/milestones"),
-    ("14_releases", "/repos/admin/codeza/releases"),
-    ("15_actions", "/repos/admin/codeza/actions"),
-    ("16_security", "/repos/admin/codeza/security"),
-    ("17_pulse", "/repos/admin/codeza/pulse"),
-    ("18_discussions", "/repos/admin/codeza/discussions"),
-    ("19_projects", "/repos/admin/codeza/projects"),
-    ("20_wiki", "/repos/admin/codeza/wiki"),
-    ("21_collaborators", "/repos/admin/codeza/collaborators"),
-    ("22_repo_settings", "/repos/admin/codeza/settings"),
-    ("23_packages", "/packages/admin"),
-    ("24_notifications", "/notifications"),
-    ("25_search", "/search"),
-    ("26_admin", "/admin"),
-    ("27_admin_users", "/admin/users"),
-    ("28_user_profile", "/users/admin"),
-    ("29_org_profile", "/orgs/codeza-org"),
-    ("30_settings", "/settings/profile"),
-    ("31_login", "/login"),
-    ("32_register", "/register"),
-    ("33_create_repo", "/repo/create"),
-    ("34_compare", "/repos/admin/codeza/compare"),
-    ("35_code_search", "/repos/admin/codeza/search"),
-    ("36_wiki_edit", "/repos/admin/codeza/wiki/pages/Home/edit"),
-    ("37_milestone_detail", "/repos/admin/codeza/milestones/1"),
-    ("38_release_detail", "/repos/admin/codeza/releases/1"),
-    ("39_workflow_runs", "/repos/admin/codeza/actions/workflows/1"),
-    ("40_settings_branches", "/repos/admin/codeza/settings/branches"),
-    ("41_settings_webhooks", "/repos/admin/codeza/settings/webhooks"),
-    ("42_settings_secrets", "/repos/admin/codeza/settings/secrets"),
-    ("43_settings_keys", "/repos/admin/codeza/settings/keys"),
-    ("44_settings_lfs", "/repos/admin/codeza/settings/lfs"),
-    ("45_org_create", "/org/create"),
-    ("46_migrate_repo", "/repo/migrate"),
-    ("47_user_followers", "/users/admin/followers"),
+    ("03_repo_detail", REPO),
+    ("04_repo_code", f"{REPO}/src/main"),
+    ("05_commits", f"{REPO}/commits"),
+    ("06_branches", f"{REPO}/branches"),
+    ("07_tags", f"{REPO}/tags"),
+    ("08_issues", f"{REPO}/issues"),
+    ("09_issue_detail", f"{REPO}/issues/1"),
+    ("10_pulls", f"{REPO}/pulls"),
+    ("11_pull_detail", f"{REPO}/pulls/2"),
+    ("12_labels", f"{REPO}/labels"),
+    ("13_milestones", f"{REPO}/milestones"),
+    ("14_releases", f"{REPO}/releases"),
+    ("15_actions", f"{REPO}/actions"),
+    ("16_wiki", f"{REPO}/wiki"),
+    ("17_pulse", f"{REPO}/pulse"),
+    ("18_packages", "/packages/codez-org"),
+    ("19_notifications", "/notifications"),
+    ("20_search", "/search"),
+    ("21_admin", "/admin"),
+    ("22_admin_users", "/admin/users"),
+    ("23_admin_orgs", "/admin/orgs"),
+    ("24_admin_emails", "/admin/emails"),
+    ("25_user_profile", "/users/alice"),
+    ("26_user_followers", "/users/alice/followers"),
+    ("27_user_following", "/users/alice/following"),
+    ("28_org_profile", "/orgs/codez-org"),
+    ("29_settings", "/settings/profile"),
+    ("30_login", "/login"),
+    ("31_register", "/register"),
+    ("32_create_repo", "/repo/create"),
+    ("33_migrate_repo", "/repo/migrate"),
+    ("34_create_org", "/org/create"),
+    ("35_compare", f"{REPO}/compare"),
+    ("36_code_search", f"{REPO}/search"),
+    ("37_wiki_edit", f"{REPO}/wiki/pages/Home/edit"),
+    ("38_milestone_detail", f"{REPO}/milestones/300"),
+    ("39_release_detail", f"{REPO}/releases/500"),
+    ("40_repo_settings", f"{REPO}/settings"),
+    ("41_file_edit", f"{REPO}/edit/README.md"),
 ]
 
 
@@ -83,4 +80,3 @@ def capture(output_dir: str) -> None:
 
 if __name__ == "__main__":
     capture(sys.argv[1] if len(sys.argv) > 1 else "docs/screenshots")
-

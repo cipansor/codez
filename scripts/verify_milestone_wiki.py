@@ -6,8 +6,8 @@ BASE_URL = "http://127.0.0.1:3000/api/v1"
 
 def test_milestone_wiki():
     print("Verifying Milestone and Wiki Endpoints...")
-    repo_owner = "admin"
-    repo_name = "codeza"
+    repo_owner = "codez-org"
+    repo_name = "codez"
 
     try:
         # 1. Create Milestone
